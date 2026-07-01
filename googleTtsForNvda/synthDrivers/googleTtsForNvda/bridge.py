@@ -40,6 +40,7 @@ WEBSOCKET_CLIENT_DIR = BASE_DIR / "websocketClientRepo"
 BINDING_NAME = "googleTtsForNvdaBridge"
 SAMPLE_RATE = 24000
 RECV_POLL_TIMEOUT = 0.005
+STARTUP_POLL_INTERVAL = 0.05
 STOP_EXPRESSION = "window.googleTtsForNvdaStop && window.googleTtsForNvdaStop()"
 
 if str(WEBSOCKET_CLIENT_DIR) not in sys.path:
@@ -434,7 +435,7 @@ class ChromeTtsBridge:
 			log.debug("Could not remove Google TTS Chrome session profile.", exc_info=True)
 
 	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
-		for _ in range(80):
+		for _ in range(400):
 			_raise_if_cancelled(cancelEvent)
 			if self._chromeProcess is not None and self._chromeProcess.poll() is not None:
 				exitCode = self._chromeProcess.returncode
@@ -446,7 +447,7 @@ class ChromeTtsBridge:
 				lines = devToolsFile.read_text(encoding="utf-8").splitlines()
 				if lines:
 					return int(lines[0])
-			time.sleep(0.25)
+			time.sleep(STARTUP_POLL_INTERVAL)
 		raise CdpError("Timed out waiting for Chrome DevTools.")
 
 	def _page_url(self) -> str:
@@ -458,7 +459,7 @@ class ChromeTtsBridge:
 		pageUrl = self._page_url()
 		if self._debugPort is None:
 			raise CdpError("Chrome DevTools port is not ready.")
-		for _ in range(40):
+		for _ in range(200):
 			_raise_if_cancelled(cancelEvent)
 			targets = _read_json_endpoint(self._debugPort, "/json/list")
 			if isinstance(targets, list):
@@ -472,7 +473,7 @@ class ChromeTtsBridge:
 						continue
 					if target.get("url") == pageUrl:
 						return wsUrl
-			time.sleep(0.25)
+			time.sleep(STARTUP_POLL_INTERVAL)
 		raise CdpError("Could not find Chrome TTS page target.")
 
 	def _next_msg_id(self) -> int:
@@ -551,7 +552,7 @@ class ChromeTtsBridge:
 		&& typeof window.googleTtsForNvdaPreload === "function"
 		&& typeof window.googleTtsForNvdaBridge === "function"
 		"""
-		for _ in range(80):
+		for _ in range(400):
 			_raise_if_cancelled(cancelEvent)
 			response = self._cdp_request(
 				"Runtime.evaluate",
@@ -561,7 +562,7 @@ class ChromeTtsBridge:
 			)
 			if response.get("result", {}).get("result", {}).get("value") is True:
 				return
-			time.sleep(0.25)
+			time.sleep(STARTUP_POLL_INTERVAL)
 		raise CdpError("Chrome TTS harness did not finish loading.")
 
 	def _close_websocket(self) -> None:

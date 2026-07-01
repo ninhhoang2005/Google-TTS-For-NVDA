@@ -61,7 +61,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	@classmethod
 	def check(cls) -> bool:
-		return ChromeTtsBridge.find_chrome() is not None
+		# Keep the driver visible; runtime dependencies are validated when selected.
+		return True
 
 	def __init__(self) -> None:
 		super().__init__()
@@ -75,6 +76,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self.catalog = VoiceCatalog(installedPackages)
 		if not self.catalog.speakers:
 			raise RuntimeError("Installed Google TTS voice packages do not contain usable voices.")
+		if ChromeTtsBridge.find_chrome() is None:
+			wx.CallAfter(self._show_missing_chrome_error)
+			raise RuntimeError("Google Chrome was not found.")
 		self.availableVoices = self._build_available_voices()
 		self.availableLanguages = {speaker.language for speaker in self.catalog.speakers}
 		self._bridge = ChromeTtsBridge(self.catalog)
@@ -128,6 +132,19 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		# Start checking after 250ms to allow NVDA to catch the RuntimeError,
 		# restore the fallback synthesizer, and display its own warning message box.
 		wx.CallLater(250, open_when_ready)
+
+	def _show_missing_chrome_error(self) -> None:
+		try:
+			import gui
+
+			gui.messageBox(
+				_("Google Chrome was not found. Install Google Chrome or set CHROME_PATH to chrome.exe."),
+				_("Google TTS For NVDA"),
+				wx.OK | wx.ICON_ERROR,
+				gui.mainFrame,
+			)
+		except Exception:
+			log.exception("Could not show Google Chrome missing message.", exc_info=True)
 
 	def terminate(self) -> None:
 		self.cancel()
