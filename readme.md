@@ -2,7 +2,7 @@
 
 An NVDA screen reader synthesizer add-on that leverages Google Chrome's WebAssembly (WASM) Text-to-Speech engine to provide high-quality, natural-sounding voices offline.
 
-*This add-on is co-developed by Nguyen Anh Duc and [@daoductrung](https://github.com/daoductrung).*
+*This add-on is co-developed by [Nguyen Anh Duc](https://github.com/nguyenanhduc09) and [Dao Duc Trung](https://github.com/daoductrung).*
 
 ---
 
@@ -76,5 +76,5 @@ We strongly welcome contributions from other developers! If you have ideas, bug 
 ## Contact
 
 If you have any questions, feedback, or need support, feel free to reach out to us via email or Telegram:
-* **Nguyen Anh Duc**: ducna1803@gmail.com | Telegram: @anhduc1803
-* **Dao Duc Trung**: trung@ddt.one | Telegram: @Daoductrung
+* **Nguyen Anh Duc**: [ducna1803@gmail.com](mailto:ducna1803@gmail.com) | Telegram: [t.me/anhduc1803](https://t.me/anhduc1803)
+* **Dao Duc Trung**: [trung@ddt.one](mailto:trung@ddt.one) | Telegram: [t.me/Daoductrung](https://t.me/Daoductrung)
