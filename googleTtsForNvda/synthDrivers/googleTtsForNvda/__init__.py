@@ -273,8 +273,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._speechCondition.notify_all()
 		with suppress(Exception):
 			self._player.stop()
-		with suppress(Exception):
-			self._bridge.cancel_current()
 
 	def pause(self, switch: bool) -> None:
 		self._player.pause(switch)
@@ -564,7 +562,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			text,
 			options,
 			on_audio,
-			cancelEvent,
+			None if cacheKey is not None else cancelEvent,
 			onMark=on_mark if hasInternalIndexes else None,
 		)
 
@@ -575,7 +573,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					return
 				self._sync_player()
 				synthIndexReached.notify(synth=self, index=index)
-		if cacheKey is not None and len(audio) >= 64 and not cancelEvent.is_set():
+		if cacheKey is not None and len(audio) >= 64:
 			self._put_cached_audio(cacheKey, audio)
 
 	def _feed_audio(self, pcm: bytes) -> None:
@@ -701,8 +699,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			"lang": speaker.language,
 			"rate": self._rate_to_chrome(rate),
 			"pitch": self._pitch_to_chrome(pitch),
-			"volume": volumeLevel,
-			"outputGain": outputGain,
+			"volume": round(volumeLevel, 4),
+			"outputGain": round(outputGain, 4),
 		}
 
 	def _voice_for_language(self, lang: str | None, fallbackVoice: str) -> str:
