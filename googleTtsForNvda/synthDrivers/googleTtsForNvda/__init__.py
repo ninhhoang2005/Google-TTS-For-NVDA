@@ -156,8 +156,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		fullCatalog = VoiceCatalog.load()
 		installedPackages = voice_store.installed_packages(fullCatalog)
 		if not installedPackages:
-			# Defer opening the Voice Manager so it appears AFTER NVDA falls
-			# back to the previous synthesizer and displays its own warning dialog.
+			# Defer UI until after this constructor aborts so synth startup is
+			# not blocked by a modal dialog waiting for user input.
 			wx.CallAfter(self._prompt_for_voice_install)
 			raise RuntimeError("No Google TTS voice packages are installed.")
 		self.catalog = VoiceCatalog(installedPackages)
@@ -195,7 +195,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._warm_current_voice_async()
 
 	def _prompt_for_voice_install(self) -> None:
-		def open_when_ready(retries: int = 200) -> None:
+		def prompt_when_ready(retries: int = 200) -> None:
 			if retries <= 0:
 				return
 			for win in wx.GetTopLevelWindows():
@@ -205,22 +205,33 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				# Wait if there is an active MessageDialog (NVDA error dialog)
 				# or any modal dialog other than settings/voice manager dialogs.
 				if "MessageDialog" in clsName:
-					wx.CallLater(150, open_when_ready, retries - 1)
+					wx.CallLater(150, prompt_when_ready, retries - 1)
 					return
 				if isinstance(win, wx.Dialog) and getattr(win, "IsModal", lambda: False)():
 					if not any(known in clsName for known in ("SettingsDialog", "SynthesizerDialog", "VoiceManagerDialog")):
-						wx.CallLater(150, open_when_ready, retries - 1)
+						wx.CallLater(150, prompt_when_ready, retries - 1)
 						return
 			try:
+				import gui
 				from globalPlugins.googleTtsForNvda import open_voice_manager_download_tab
 
-				open_voice_manager_download_tab()
+				answer = gui.messageBox(
+					_(
+						"No Google TTS voice packages are installed. "
+						"Download voices now?"
+					),
+					_("Google TTS For NVDA"),
+					wx.OK | wx.CANCEL | wx.ICON_QUESTION,
+					gui.mainFrame,
+				)
+				if answer == getattr(wx, "ID_OK", wx.OK) or answer == wx.OK:
+					open_voice_manager_download_tab()
 			except Exception:
-				log.exception("Could not open Google TTS voice manager.", exc_info=True)
+				log.exception("Could not show Google TTS voice install prompt.", exc_info=True)
 
 		# Start checking after 250ms to allow NVDA to catch the RuntimeError,
 		# restore the fallback synthesizer, and display its own warning message box.
-		wx.CallLater(250, open_when_ready)
+		wx.CallLater(250, prompt_when_ready)
 
 	def _show_missing_chrome_error(self) -> None:
 		try:
