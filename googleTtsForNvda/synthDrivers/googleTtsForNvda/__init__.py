@@ -4,9 +4,6 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
-import hashlib
-import os
-import queue
 import threading
 import time
 from typing import Any
@@ -28,101 +25,12 @@ from . import voice_store
 addonHandler.initTranslation()
 
 
-_SHORT_CACHE_MAX_CHARS = 200000
+_SHORT_CACHE_MAX_CHARS = 200
 _SHORT_CACHE_MAX_ITEMS = 4096
 _SHORT_CACHE_MAX_BYTES = 100 * 1024 * 1024
 _OUTPUT_GAIN_MAKEUP = 2.0
 _SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
 _IndexMarker = tuple[Any, int]
-
-
-class _PersistentDiskCache:
-	def __init__(self, cacheDir: os.PathLike[str] | str):
-		self._cacheDir = str(cacheDir)
-		self._queue: queue.Queue[tuple[str, bytes] | None] = queue.Queue()
-		self._shutdown = threading.Event()
-		with suppress(Exception):
-			os.makedirs(self._cacheDir, exist_ok=True)
-		self._writerThread = threading.Thread(
-			name="googleTtsForNvda.disk_cache_writer",
-			target=self._writer_loop,
-			daemon=True,
-		)
-		self._writerThread.start()
-
-	def _hash_key(self, key: tuple[Any, ...]) -> str:
-		return hashlib.sha256(repr(key).encode("utf-8", errors="replace")).hexdigest()
-
-	def _file_path(self, keyHash: str) -> str:
-		return os.path.join(self._cacheDir, f"{keyHash}.pcm")
-
-	def get(self, key: tuple[Any, ...]) -> bytes | None:
-		keyHash = self._hash_key(key)
-		filePath = self._file_path(keyHash)
-		try:
-			if os.path.exists(filePath):
-				with open(filePath, "rb") as f:
-					audio = f.read()
-				if audio:
-					self._queue.put((keyHash, b""))
-					return audio
-		except Exception:
-			log.debug("Persistent disk cache read failed for %s", keyHash, exc_info=True)
-		return None
-
-	def put(self, key: tuple[Any, ...], audio: bytes) -> None:
-		if not audio:
-			return
-		keyHash = self._hash_key(key)
-		self._queue.put((keyHash, audio))
-
-	def _writer_loop(self) -> None:
-		writeCount = 0
-		while not self._shutdown.is_set():
-			try:
-				item = self._queue.get(timeout=0.5)
-			except queue.Empty:
-				continue
-			if item is None:
-				break
-			keyHash, audio = item
-			filePath = self._file_path(keyHash)
-			try:
-				if audio:
-					with open(filePath, "wb") as f:
-						f.write(audio)
-					writeCount += 1
-				else:
-					if os.path.exists(filePath):
-						os.utime(filePath, None)
-				if writeCount >= 50:
-					writeCount = 0
-					self._evict_if_needed()
-			except Exception:
-				log.debug("Persistent disk cache write failed for %s", keyHash, exc_info=True)
-			finally:
-				self._queue.task_done()
-
-	def _evict_if_needed(self) -> None:
-		try:
-			files = [
-				(os.path.join(self._cacheDir, fname), os.path.getmtime(os.path.join(self._cacheDir, fname)))
-				for fname in os.listdir(self._cacheDir)
-				if fname.endswith(".pcm")
-			]
-			if len(files) > 5000:
-				files.sort(key=lambda x: x[1])
-				for fpath, _mtime in files[:-4000]:
-					with suppress(Exception):
-						os.remove(fpath)
-		except Exception:
-			pass
-
-	def close(self) -> None:
-		self._shutdown.set()
-		self._queue.put(None)
-		with suppress(Exception):
-			self._writerThread.join(timeout=1.0)
 
 
 class SynthDriver(synthDriverHandler.SynthDriver):
@@ -156,8 +64,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		fullCatalog = VoiceCatalog.load()
 		installedPackages = voice_store.installed_packages(fullCatalog)
 		if not installedPackages:
-			# Defer opening the Voice Manager so it appears AFTER NVDA falls
-			# back to the previous synthesizer and displays its own warning dialog.
+			# Defer UI until after this constructor aborts so synth startup is
+			# not blocked by a modal dialog waiting for user input.
 			wx.CallAfter(self._prompt_for_voice_install)
 			raise RuntimeError("No Google TTS voice packages are installed.")
 		self.catalog = VoiceCatalog(installedPackages)
@@ -178,7 +86,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._cacheLock = threading.RLock()
 		self._shortAudioCache: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
 		self._shortAudioCacheBytes = 0
-		self._diskCache = _PersistentDiskCache(voice_store.data_root() / "audio_cache")
 		self._worker = threading.Thread(
 			name="googleTtsForNvda.speech",
 			target=self._speech_loop,
@@ -195,7 +102,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._warm_current_voice_async()
 
 	def _prompt_for_voice_install(self) -> None:
-		def open_when_ready(retries: int = 200) -> None:
+		def prompt_when_ready(retries: int = 200) -> None:
 			if retries <= 0:
 				return
 			for win in wx.GetTopLevelWindows():
@@ -205,22 +112,33 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				# Wait if there is an active MessageDialog (NVDA error dialog)
 				# or any modal dialog other than settings/voice manager dialogs.
 				if "MessageDialog" in clsName:
-					wx.CallLater(150, open_when_ready, retries - 1)
+					wx.CallLater(150, prompt_when_ready, retries - 1)
 					return
 				if isinstance(win, wx.Dialog) and getattr(win, "IsModal", lambda: False)():
 					if not any(known in clsName for known in ("SettingsDialog", "SynthesizerDialog", "VoiceManagerDialog")):
-						wx.CallLater(150, open_when_ready, retries - 1)
+						wx.CallLater(150, prompt_when_ready, retries - 1)
 						return
 			try:
+				import gui
 				from globalPlugins.googleTtsForNvda import open_voice_manager_download_tab
 
-				open_voice_manager_download_tab()
+				answer = gui.messageBox(
+					_(
+						"No Google TTS voice packages are installed. "
+						"Download voices now?"
+					),
+					_("Google TTS For NVDA"),
+					wx.OK | wx.CANCEL | wx.ICON_QUESTION,
+					gui.mainFrame,
+				)
+				if answer == getattr(wx, "ID_OK", wx.OK) or answer == wx.OK:
+					open_voice_manager_download_tab()
 			except Exception:
-				log.exception("Could not open Google TTS voice manager.", exc_info=True)
+				log.exception("Could not show Google TTS voice install prompt.", exc_info=True)
 
 		# Start checking after 250ms to allow NVDA to catch the RuntimeError,
 		# restore the fallback synthesizer, and display its own warning message box.
-		wx.CallLater(250, open_when_ready)
+		wx.CallLater(250, prompt_when_ready)
 
 	def _show_missing_chrome_error(self) -> None:
 		try:
@@ -244,9 +162,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._speechCondition.notify_all()
 		with suppress(Exception):
 			self._bridge.terminate()
-		with suppress(Exception):
-			if hasattr(self, "_diskCache") and self._diskCache is not None:
-				self._diskCache.close()
 		with suppress(Exception):
 			self._player.close()
 
@@ -654,20 +569,13 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			if audio is not None:
 				self._shortAudioCache.move_to_end(key)
 				return audio
-		if hasattr(self, "_diskCache") and self._diskCache is not None:
-			audio = self._diskCache.get(key)
-			if audio is not None:
-				self._put_cached_audio(key, audio, writeToDisk=False)
-				return audio
 		return None
 
-	def _put_cached_audio(self, key: tuple[Any, ...], audio: bytes, writeToDisk: bool = True) -> None:
+	def _put_cached_audio(self, key: tuple[Any, ...], audio: bytes) -> None:
 		if not audio:
 			return
 		if len(audio) > _SHORT_CACHE_MAX_BYTES:
 			return
-		if writeToDisk and hasattr(self, "_diskCache") and self._diskCache is not None:
-			self._diskCache.put(key, audio)
 		with self._cacheLock:
 			oldAudio = self._shortAudioCache.pop(key, None)
 			if oldAudio is not None:
