@@ -9,6 +9,7 @@ from typing import Any
 import addonHandler
 import config
 import gui
+import synthDriverHandler
 import ui
 import wx
 from gui import nvdaControls
@@ -132,8 +133,10 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.installedPackages: list[VoicePackage] = []
 		self.downloadPackages: list[VoicePackage] = []
 		self._allInstalledPackages: list[VoicePackage] = []
+		self._allUsableInstalledPackages: list[VoicePackage] = []
 		self._allDownloadPackages: list[VoicePackage] = []
 		self.isBusy = False
+		self._pendingRemoveAfterSynthSwitch: list[VoicePackage] | None = None
 		self._initialPage = initialPage
 		self._lastProgressAnnouncement = -1
 		self._build_ui()
@@ -202,7 +205,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		)
 		self.installedSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_installed_select_all)
 		sizer.Add(self.installedSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
-		self.installedList = self._create_list(self.installedPanel)
+		self.installedList = self._create_list(self.installedPanel, includeStatus=True)
 		self.installedList.SetName(_("Installed voice packages"))
 		self.installedList.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_installed_item_check_changed)
 		self.installedList.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_installed_item_check_changed)
@@ -253,7 +256,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			(_("Size"), 100),
 		]
 		if includeStatus:
-			columns.append((_("Status"), 120))
+			columns.append((_("Status"), 180))
 		for index, (label, width) in enumerate(columns):
 			listCtrl.InsertColumn(index, label, width=width)
 		return listCtrl
@@ -307,7 +310,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self._apply_download_filter()
 
 	def refresh_lists(self) -> None:
-		self._allInstalledPackages = voice_store.installed_packages(self.catalog)
+		self._allInstalledPackages = voice_store.physically_installed_packages(self.catalog)
+		self._allUsableInstalledPackages = voice_store.installed_packages(self.catalog)
 		installedIds = {pkg.id for pkg in self._allInstalledPackages}
 		self._allDownloadPackages = [pkg for pkg in self.catalog.packages if pkg.id not in installedIds]
 
@@ -406,8 +410,16 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		listCtrl.SetItem(index, 2, self._speaker_names(package))
 		listCtrl.SetItem(index, 3, self._format_size(package.compressedSize))
 		if includeStatus:
-			status = _("installed") if voice_store.is_package_installed(package) else _("not installed")
-			listCtrl.SetItem(index, 4, status)
+			listCtrl.SetItem(index, 4, self._package_status(package))
+
+	def _package_status(self, package: VoicePackage) -> str:
+		if package.dependentVoiceId:
+			installedIds = {pkg.id for pkg in self._allInstalledPackages}
+			if package.dependentVoiceId not in installedIds:
+				return _("Missing dependency: {dependency}").format(
+					dependency=package.dependentVoiceId,
+				)
+		return _("Installed")
 
 	def _speaker_names(self, package: VoicePackage) -> str:
 		names = [str(speaker.get("name") or speaker.get("speaker") or "") for speaker in package.speakers]
@@ -463,6 +475,107 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def _package_list_text(self, packages: list[VoicePackage]) -> str:
 		return ", ".join(pkg.id for pkg in packages)
 
+	def _usable_packages_after_removal(self, packages: list[VoicePackage]) -> list[VoicePackage]:
+		removedIds = {pkg.id for pkg in packages}
+		remaining = [pkg for pkg in self._allInstalledPackages if pkg.id not in removedIds]
+		return voice_store.installed_packages(VoiceCatalog(remaining))
+
+	def _removes_all_usable_voices(self, packages: list[VoicePackage]) -> bool:
+		return bool(self._allUsableInstalledPackages) and not self._usable_packages_after_removal(packages)
+
+	def _is_google_synth_current(self) -> bool:
+		try:
+			return getattr(synthDriverHandler.getSynth(), "name", "") == SYNTH_NAME
+		except Exception:
+			return False
+
+	def _open_synthesizer_dialog(self) -> bool:
+		try:
+			from gui import settingsDialogs
+
+			dialogClass = getattr(settingsDialogs, "SynthesizerSelectionDialog", None)
+			if dialogClass is None:
+				dialogClass = getattr(settingsDialogs, "SynthesizerDialog", None)
+			if dialogClass is None:
+				raise RuntimeError("Select Synthesizer dialog class was not found.")
+			gui.mainFrame.popupSettingsDialog(dialogClass)
+			return True
+		except Exception as exc:
+			log.error("Could not open Select Synthesizer dialog: %s", exc)
+			gui.messageBox(
+				_("Could not open the Select Synthesizer dialog."),
+				_("Google TTS Voice Manager"),
+				wx.OK | wx.ICON_ERROR,
+				self,
+			)
+			return False
+
+	def _confirm_remove_last_inactive_voice(self, packages: list[VoicePackage]) -> bool:
+		packageNames = self._package_list_text(packages)
+		answer = gui.messageBox(
+			_(
+				"Make sure you have saved your NVDA configuration before removing this only remaining "
+				"Google TTS voice package.\n\nPackages to remove: {packages}"
+			).format(packages=packageNames),
+			_("Google TTS Voice Manager"),
+			wx.OK | wx.CANCEL | wx.ICON_WARNING,
+			self,
+		)
+		return answer == wx.OK
+
+	def _confirm_remove_last_active_voice(self, packages: list[VoicePackage]) -> bool:
+		packageNames = self._package_list_text(packages)
+		answer = gui.messageBox(
+			_(
+				"You are removing the only remaining Google TTS voice package. "
+				"If it is removed, no Google TTS voice will remain available.\n\n"
+				"Packages to remove: {packages}\n\n"
+				"Choose Yes to open Select Synthesizer and choose another synthesizer before removal. "
+				"After choosing another synthesizer, press NVDA+Control+C to save the current configuration "
+				"if you turned off Save configuration when exiting NVDA in General Settings."
+			).format(packages=packageNames),
+			_("Google TTS Voice Manager"),
+			wx.YES_NO | wx.ICON_WARNING,
+			self,
+		)
+		return answer == wx.YES
+
+	def _schedule_remove_after_synth_switch(self, packages: list[VoicePackage]) -> None:
+		self._pendingRemoveAfterSynthSwitch = packages
+		self.set_status(
+			_("Waiting for another synthesizer before removing Google TTS voices."),
+			0,
+			announce=True,
+		)
+		if self._open_synthesizer_dialog():
+			wx.CallLater(500, self._remove_after_synth_switch, packages, 0)
+		else:
+			self._pendingRemoveAfterSynthSwitch = None
+
+	def _remove_after_synth_switch(self, packages: list[VoicePackage], attempts: int) -> None:
+		if self._pendingRemoveAfterSynthSwitch is not packages:
+			return
+		try:
+			if not self.IsShown():
+				self._pendingRemoveAfterSynthSwitch = None
+				return
+		except RuntimeError:
+			self._pendingRemoveAfterSynthSwitch = None
+			return
+		if not self._is_google_synth_current():
+			self._pendingRemoveAfterSynthSwitch = None
+			self._remove_packages(packages)
+			return
+		if attempts >= 600:
+			self._pendingRemoveAfterSynthSwitch = None
+			self.set_status(
+				_("Voice packages were not removed because Google TTS is still the current synthesizer."),
+				0,
+				announce=True,
+			)
+			return
+		wx.CallLater(500, self._remove_after_synth_switch, packages, attempts + 1)
+
 	def _first_voice_id(self, packages: list[VoicePackage]) -> str | None:
 		catalog = VoiceCatalog(packages)
 		for speaker in catalog.speakers:
@@ -480,7 +593,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		removedPrefix = tuple(f"{packageId}:" for packageId in removedPackageIds)
 		if not configuredVoice.startswith(removedPrefix):
 			return None
-		fallbackVoice = self._first_voice_id(self._allInstalledPackages)
+		fallbackVoice = self._first_voice_id(self._allUsableInstalledPackages)
 		if not fallbackVoice:
 			return None
 		try:
@@ -586,6 +699,13 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self._run_worker(work, done)
 
 	def on_remove_selected(self, evt: wx.CommandEvent) -> None:
+		if self._pendingRemoveAfterSynthSwitch is not None:
+			self.set_status(
+				_("Waiting for another synthesizer before removing Google TTS voices."),
+				0,
+				announce=True,
+			)
+			return
 		selectedPackages = self._checked_packages(self.installedList, self.installedPackages)
 		if not selectedPackages:
 			self.set_status(_("No voice packages selected."), 0, announce=True)
@@ -593,34 +713,44 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		selectedIds = {pkg.id for pkg in selectedPackages}
 		packages = self._with_installed_dependents(selectedPackages)
 		dependentPackages = [pkg for pkg in packages if pkg.id not in selectedIds]
-		if len(packages) == 1:
-			confirmMsg = _("Remove {package}?").format(package=packages[0].id)
-		elif dependentPackages:
-			selectedNames = self._package_list_text(selectedPackages)
-			dependentNames = self._package_list_text(dependentPackages)
-			confirmMsg = _(
-				"Remove {count} voice packages?\n"
-				"Selected: {selected}\n"
-				"Also remove dependent packages: {dependents}"
-			).format(
-				count=len(packages),
-				selected=selectedNames,
-				dependents=dependentNames,
-			)
+		removesAllUsable = self._removes_all_usable_voices(packages)
+		if removesAllUsable:
+			packages = self._dependents_first(packages)
+			if self._is_google_synth_current():
+				if self._confirm_remove_last_active_voice(packages):
+					self._schedule_remove_after_synth_switch(packages)
+				return
+			if not self._confirm_remove_last_inactive_voice(packages):
+				return
 		else:
-			packageNames = self._package_list_text(packages)
-			confirmMsg = _("Remove {count} voice packages?\n{packages}").format(
-				count=len(packages), packages=packageNames,
+			if len(packages) == 1:
+				confirmMsg = _("Remove {package}?").format(package=packages[0].id)
+			elif dependentPackages:
+				selectedNames = self._package_list_text(selectedPackages)
+				dependentNames = self._package_list_text(dependentPackages)
+				confirmMsg = _(
+					"Remove {count} voice packages?\n"
+					"Selected: {selected}\n"
+					"Also remove dependent packages: {dependents}"
+				).format(
+					count=len(packages),
+					selected=selectedNames,
+					dependents=dependentNames,
+				)
+			else:
+				packageNames = self._package_list_text(packages)
+				confirmMsg = _("Remove {count} voice packages?\n{packages}").format(
+					count=len(packages), packages=packageNames,
+				)
+			answer = gui.messageBox(
+				confirmMsg,
+				_("Google TTS Voice Manager"),
+				wx.YES_NO | wx.ICON_QUESTION,
+				self,
 			)
-		answer = gui.messageBox(
-			confirmMsg,
-			_("Google TTS Voice Manager"),
-			wx.YES_NO | wx.ICON_QUESTION,
-			self,
-		)
-		if answer != wx.YES:
-			return
-		packages = self._dependents_first(packages)
+			if answer != wx.YES:
+				return
+			packages = self._dependents_first(packages)
 		self._remove_packages(packages)
 
 	def _remove_packages(self, packages: list[VoicePackage]) -> None:
