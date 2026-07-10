@@ -67,18 +67,20 @@ def open_voice_manager_download_tab() -> None:
 	_open_voice_manager("download")
 
 
-def _has_usable_google_tts_voices() -> bool:
+def _google_tts_voice_status() -> str:
 	try:
 		fullCatalog = VoiceCatalog.load()
 		installedPackages = voice_store.installed_packages(fullCatalog)
 		if not installedPackages:
-			return False
-		return bool(VoiceCatalog(installedPackages).speakers)
+			return "missing"
+		if not VoiceCatalog(installedPackages).speakers:
+			return "unusable"
+		return "ready"
 	except EngineLibraryError:
 		raise
 	except Exception:
 		log.exception("Could not check installed Google TTS voice packages.", exc_info=True)
-		return False
+		return "missing"
 
 
 def _engine_library_error_message(error: EngineLibraryError) -> str:
@@ -115,14 +117,14 @@ def _show_engine_library_error(error: EngineLibraryError) -> None:
 	)
 
 
-def _show_missing_voices_prompt() -> None:
+def _show_missing_voices_prompt(message: str | None = None) -> None:
 	global _missingVoicesPromptActive
 	if _missingVoicesPromptActive:
 		return
 	_missingVoicesPromptActive = True
 	try:
 		answer = gui.messageBox(
-			_(
+			message or _(
 				"No Google TTS For NVDA voices are installed.\n\n"
 				"Press OK to open Google TTS Voice Manager and download a voice package.\n"
 				"Press Cancel to keep using your current synthesizer.\n\n"
@@ -152,12 +154,19 @@ def _set_synth_with_google_tts_voice_prompt(
 		and not isFallback
 	):
 		try:
-			hasVoices = _has_usable_google_tts_voices()
+			voiceStatus = _google_tts_voice_status()
 		except EngineLibraryError as exc:
 			wx.CallAfter(_show_engine_library_error, exc)
 			return True
-		if not hasVoices:
-			wx.CallAfter(_show_missing_voices_prompt)
+		if voiceStatus != "ready":
+			message = None
+			if voiceStatus == "unusable":
+				message = _(
+					"No usable Google TTS For NVDA voices are available.\n\n"
+					"Press OK to open Google TTS Voice Manager and install another voice package.\n"
+					"Press Cancel to keep using your current synthesizer."
+				)
+			wx.CallAfter(_show_missing_voices_prompt, message)
 			return True
 	if _originalSetSynth is None:
 		return False

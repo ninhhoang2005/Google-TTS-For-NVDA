@@ -105,6 +105,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			)
 		self.catalog = VoiceCatalog(installedPackages)
 		if not self.catalog.speakers:
+			wx.CallAfter(
+				self._prompt_for_voice_install,
+				_(
+					"No usable Google TTS For NVDA voices are available.\n\n"
+					"Press OK to open Google TTS Voice Manager and install another voice package.\n"
+					"Press Cancel to keep using your current synthesizer."
+				),
+			)
 			raise RuntimeError(
 				"Installed Google TTS For NVDA voice packages do not contain any usable voices. "
 				"Open Google TTS Voice Manager to install another voice package."
@@ -143,7 +151,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._warmupCancelEvent = threading.Event()
 		self._warm_current_voice_async()
 
-	def _prompt_for_voice_install(self) -> None:
+	def _prompt_for_voice_install(self, message: str | None = None) -> None:
+		# Fallback for direct synth-driver loads when the global plugin did
+		# not intercept synth selection before this constructor was reached.
 		def prompt_when_ready(retries: int = 200) -> None:
 			if retries <= 0:
 				return
@@ -165,7 +175,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				from globalPlugins.googleTtsForNvda import open_voice_manager_download_tab
 
 				answer = gui.messageBox(
-					_(
+					message or _(
 						"No Google TTS For NVDA voices are installed.\n\n"
 						"Press OK to open Google TTS Voice Manager and download a voice package.\n"
 						"Press Cancel to keep using your current synthesizer.\n\n"
@@ -173,7 +183,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 						"Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
 					),
 					_("Google TTS For NVDA"),
-					wx.OK | wx.CANCEL | wx.ICON_QUESTION,
+					wx.OK | wx.CANCEL | wx.ICON_INFORMATION,
 					gui.mainFrame,
 				)
 				if answer == getattr(wx, "ID_OK", wx.OK) or answer == wx.OK:

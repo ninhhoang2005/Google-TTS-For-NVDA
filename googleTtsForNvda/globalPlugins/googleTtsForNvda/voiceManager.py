@@ -178,7 +178,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.refreshButton = wx.Button(self, label=_("&Refresh"))
 		self.openFolderButton = wx.Button(self, label=_("&Open voice packages folder"))
 		self.closeButton = wx.Button(self, id=wx.ID_CLOSE)
-		self.refreshButton.Bind(wx.EVT_BUTTON, lambda evt: self.refresh_lists())
+		self.refreshButton.Bind(wx.EVT_BUTTON, lambda evt: self.refresh_lists(announce=True))
 		self.openFolderButton.Bind(wx.EVT_BUTTON, self.on_open_folder)
 		self.closeButton.Bind(wx.EVT_BUTTON, lambda evt: self.Close())
 		buttonRow.Add(self.refreshButton)
@@ -202,7 +202,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		sizer.Add(filterRow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
 		self.installedSelectAllCheck = wx.CheckBox(
-			self.installedPanel, label=_("Select &all voice packages"),
+			self.installedPanel, label=_("Check &all voice packages"),
 		)
 		self.installedSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_installed_select_all)
 		sizer.Add(self.installedSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
@@ -231,7 +231,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		sizer.Add(filterRow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
 		self.downloadSelectAllCheck = wx.CheckBox(
-			self.downloadPanel, label=_("Select &all voice packages"),
+			self.downloadPanel, label=_("Check &all voice packages"),
 		)
 		self.downloadSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_download_select_all)
 		sizer.Add(self.downloadSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
@@ -310,12 +310,16 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def on_download_language_filter_changed(self, evt: wx.CommandEvent) -> None:
 		self._apply_download_filter()
 
-	def refresh_lists(self) -> None:
+	def refresh_lists(self, announce: bool = False) -> None:
 		self._allInstalledPackages = voice_store.physically_installed_packages(self.catalog)
 		self._allUsableInstalledPackages = voice_store.installed_packages(self.catalog)
 		installedIds = {pkg.id for pkg in self._allInstalledPackages}
 		self._allDownloadPackages = [pkg for pkg in self.catalog.packages if pkg.id not in installedIds]
 
+		summary = _("{installed} installed voice packages, {available} available to download.").format(
+			installed=len(self._allInstalledPackages),
+			available=len(self._allDownloadPackages),
+		)
 		title = _("{installed} installed voice packages, {available} available to download - Google TTS Voice Manager").format(
 			installed=len(self._allInstalledPackages),
 			available=len(self._allDownloadPackages),
@@ -327,6 +331,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 		self._apply_installed_filter()
 		self._apply_download_filter()
+		if announce:
+			self.set_status(summary, 0, announce=True)
 
 	def focus_default_control(self) -> None:
 		if self._initialPage == "download":
@@ -641,13 +647,13 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def on_download_selected(self, evt: wx.CommandEvent) -> None:
 		packages = self._checked_packages(self.downloadList, self.downloadPackages)
 		if not packages:
-			self.set_status(_("No voice packages selected for download."), 0, announce=True)
+			self.set_status(_("No voice packages checked for download."), 0, announce=True)
 			return
 		totalCount = len(packages)
 
 		def work() -> dict[str, Any]:
 			succeeded = 0
-			failed: list[str] = []
+			failed: list[tuple[str, str]] = []
 			for i, package in enumerate(packages):
 				def _progress(
 					percent: int | None,
@@ -657,13 +663,22 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 				) -> None:
 					if percent is not None:
 						overall = int((_idx * 100 + percent) / totalCount)
+						statusMessage = _("Downloading {current}/{total}: {package}, overall {percent} percent complete").format(
+							current=_idx + 1,
+							total=totalCount,
+							package=_pkgId,
+							percent=overall,
+						)
 					else:
 						overall = None
+						statusMessage = _("Downloading {current}/{total}: {package}").format(
+							current=_idx + 1,
+							total=totalCount,
+							package=_pkgId,
+						)
 					wx.CallAfter(
 						self.set_status,
-						_("Downloading {current}/{total}: {package}").format(
-							current=_idx + 1, total=totalCount, package=_pkgId,
-						),
+						statusMessage,
 						overall,
 					)
 				try:
@@ -671,7 +686,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 					succeeded += 1
 				except Exception as exc:
 					log.error("Failed to download %s: %s", package.id, exc)
-					failed.append(package.id)
+					failed.append((package.id, self._user_friendly_error_message(exc)))
 			return {"succeeded": succeeded, "failed": failed}
 
 		def done(result: Any | BaseException) -> None:
@@ -685,18 +700,18 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			failed = result["failed"]
 			if failed:
 				message = _(
-					"Downloaded {succeeded} of {total} voice packages. Could not download: {failList}"
+					"Downloaded {succeeded} of {total} voice packages. Could not download: {failList}. First error: {reason}"
 				).format(
 					succeeded=succeeded,
 					total=totalCount,
-					failList=", ".join(failed),
+					failList=", ".join(packageId for packageId, _reason in failed),
+					reason=failed[0][1],
 				)
 			elif succeeded == 1:
 				message = _("Downloaded {package}.").format(package=packages[0].id)
 			else:
 				message = _("Downloaded {count} voice packages.").format(count=succeeded)
-			self.set_status(message, 100)
-			ui.message(message)
+			self.set_status(message, 100, announce=True)
 			self._focus_active_page()
 
 		self._run_worker(work, done, _("Downloading voice packages..."))
@@ -711,7 +726,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			return
 		selectedPackages = self._checked_packages(self.installedList, self.installedPackages)
 		if not selectedPackages:
-			self.set_status(_("No voice packages selected for removal."), 0, announce=True)
+			self.set_status(_("No voice packages checked for removal."), 0, announce=True)
 			return
 		selectedIds = {pkg.id for pkg in selectedPackages}
 		packages = self._with_installed_dependents(selectedPackages)
@@ -733,7 +748,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 				dependentNames = self._package_list_text(dependentPackages)
 				confirmMsg = _(
 					"Remove {count} voice packages?\n"
-					"Selected: {selected}\n"
+					"Checked: {selected}\n"
 					"Also remove voice packages that depend on them: {dependents}"
 				).format(
 					count=len(packages),
@@ -761,7 +776,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 		def work() -> dict[str, Any]:
 			succeeded = 0
-			failed: list[str] = []
+			failed: list[tuple[str, str]] = []
 			removedIds: list[str] = []
 			for package in packages:
 				try:
@@ -770,7 +785,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 					removedIds.append(package.id)
 				except Exception as exc:
 					log.error("Failed to remove %s: %s", package.id, exc)
-					failed.append(package.id)
+					failed.append((package.id, self._user_friendly_error_message(exc)))
 			return {"succeeded": succeeded, "failed": failed, "removedIds": removedIds}
 
 		def done(result: Any | BaseException) -> None:
@@ -785,11 +800,12 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			resetVoice = self._reset_configured_voice_if_removed(set(result.get("removedIds", [])))
 			if failed:
 				message = _(
-					"Removed {succeeded} of {total} voice packages. Could not remove: {failList}"
+					"Removed {succeeded} of {total} voice packages. Could not remove: {failList}. First error: {reason}"
 				).format(
 					succeeded=succeeded,
 					total=totalCount,
-					failList=", ".join(failed),
+					failList=", ".join(packageId for packageId, _reason in failed),
+					reason=failed[0][1],
 				)
 			elif succeeded == 1:
 				message = _("Removed {package}.").format(package=packages[0].id)
@@ -800,8 +816,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 					message=message,
 					voice=resetVoice,
 				)
-			self.set_status(message, 100)
-			ui.message(message)
+			self.set_status(message, 100, announce=True)
 			self._focus_active_page()
 
 		self._run_worker(work, done, _("Removing voice packages..."))
@@ -852,7 +867,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		if isinstance(error, PermissionError):
 			return _("Could not write to the voice packages folder. Check folder permissions and try again.")
 		if isinstance(error, FileNotFoundError):
-			return _("The selected voice package file could not be found.")
+			return _("The voice package file could not be found. Refresh the list and try again.")
 		if isinstance(error, (urllib.error.URLError, TimeoutError)):
 			return _("Could not download the voice package. Check your internet connection and try again.")
 		if isinstance(error, OSError):

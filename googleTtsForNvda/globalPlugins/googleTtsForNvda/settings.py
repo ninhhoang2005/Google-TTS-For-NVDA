@@ -115,6 +115,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self.runtimeChoice.SetSelection(self._runtimeValues.index(self._savedRuntime))
 		self.runtimeChoice.SetName(_("Browser runtime"))
 		self.effectiveRuntimeText = helper.addItem(wx.StaticText(self, label=self._effective_runtime_message()))
+		self.effectiveRuntimeText.SetName(_("Browser runtime status"))
 		settingsSizer.Fit(self)
 
 	def postInit(self) -> None:
