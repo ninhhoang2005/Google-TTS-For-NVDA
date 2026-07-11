@@ -6,10 +6,13 @@
 </head>
 <body>
 	<h1>Google TTS For NVDA</h1>
-	<p><strong>Developers:</strong> Dao Duc Trung and Nguyen Anh Duc.</p>
-	<p>Google TTS For NVDA uses Google's WASM TTS engine through a managed headless browser runtime: Microsoft Edge or Google Chrome.</p>
+	<p><strong>Developers:</strong> Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong.</p>
+	<p>Google TTS For NVDA uses Google's WASM TTS engine locally through a managed headless browser runtime: Microsoft Edge or Google Chrome.</p>
+	<p>This add-on grew from a simple dream: making Google TTS usable as a practical, everyday NVDA synthesizer on Windows computers.</p>
 	<p>The add-on exposes Google TTS voices as an NVDA synthesizer and includes a Tools menu Voice Manager for downloading or removing voice packages listed in the bundled <code>voices.json</code> catalog.</p>
+	<p>Voice packages that are known not to work with the bundled WASM TTS engine are marked as not supported in Voice Manager and are not exposed as synthesizer voices.</p>
 	<p>Settings include voice, rate, rate boost, pitch, volume, and browser runtime. Voice packages are downloaded only from the Google TTS Voice Manager.</p>
 	<p>Repeated short phrases under 5000 characters are cached in RAM for the current NVDA session only. The cache is volatile and is cleared automatically when NVDA exits or the computer restarts.</p>
+	<p>For translation work, Poedit can edit a locale and save synchronized <code>.po</code> and <code>.mo</code> files; in that workflow, <code>build_i18n.py</code> can be used to validate the translation. If another translation tool edits <code>.po</code> files without generating or synchronizing <code>.mo</code>, the i18n script can build the generated translation files.</p>
 </body>
 </html>

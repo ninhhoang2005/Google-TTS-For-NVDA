@@ -127,7 +127,7 @@ def _show_missing_voices_prompt(message: str | None = None) -> None:
 			message or _(
 				"No Google TTS For NVDA voices are installed.\n\n"
 				"Press OK to open Google TTS Voice Manager and download a voice package.\n"
-				"Press Cancel to keep using your current synthesizer.\n\n"
+				"Press Cancel to keep using your current synthesizer for now.\n\n"
 				"You can also open Voice Manager later from NVDA Menu > Tools > "
 				"Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
 			),
@@ -162,9 +162,9 @@ def _set_synth_with_google_tts_voice_prompt(
 			message = None
 			if voiceStatus == "unusable":
 				message = _(
-					"No usable Google TTS For NVDA voices are available.\n\n"
+					"No installed Google TTS For NVDA voices can be used.\n\n"
 					"Press OK to open Google TTS Voice Manager and install another voice package.\n"
-					"Press Cancel to keep using your current synthesizer."
+					"Press Cancel to keep using your current synthesizer for now."
 				)
 			wx.CallAfter(_show_missing_voices_prompt, message)
 			return True
@@ -222,7 +222,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self.voiceManagerMenuItem = gui.mainFrame.sysTrayIcon.toolsMenu.Append(
 				wx.ID_ANY,
 				_("Google TTS Voice Manager..."),
-				_("Download and remove Google TTS For NVDA voice packages"),
+				_("Download or remove Google TTS For NVDA voice packages"),
 			)
 			gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.on_open_voice_manager, self.voiceManagerMenuItem)
 

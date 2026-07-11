@@ -2,6 +2,8 @@
 
 You are working on **Google TTS For NVDA**, an NVDA screen-reader synthesizer add-on. Act as **Codex, a software engineering agent maintaining a production accessibility add-on**, not as an end user. Your job is to make safe, minimal, testable changes that preserve NVDA responsiveness, accessibility, packaging correctness, and the Microsoft Edge / Google Chrome WASM TTS bridge.
 
+Product vision: this add-on grew from the dream of making Google TTS usable as a practical, everyday NVDA synthesizer on Windows computers. Preserve that user-facing goal when changing code, documentation, packaging, and translation workflows.
+
 This file is the operating manual for coding agents. Follow it before making or suggesting code changes.
 
 ---
@@ -301,7 +303,36 @@ When modifying `voiceManager.py` or any UI:
 ### Documentation
 
 - Update `doc/en/readme.html` when changing user-visible settings or behavior.
+- Keep localized documentation in `doc/<language>/readme.html` when a supported translation exists.
 - Known stale documentation: it still mentions removed `acceleration mode` and `transposition`; remove or correct those references when touching settings docs.
+
+### Translation and localization
+
+- Keep user-facing NVDA UI strings wrapped in `_('...')` after `addonHandler.initTranslation()` is initialized.
+- The translation template is `googleTtsForNvda/locale/nvda.pot`.
+- Locale catalogs live at `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po`.
+- Generated translation files are `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.mo` and `googleTtsForNvda/locale/<language>/manifest.ini`.
+- Localized documentation lives at `googleTtsForNvda/doc/<language>/readme.html`.
+- Translation docs must explain what each translation part affects: UI strings for NVDA dialogs/messages/settings, `.mo` for runtime loading, localized `manifest.ini` for NVDA add-on metadata, localized `readme.html` for user help, `languageSort.json` for visible Voice Manager language ordering, and `nvda.pot` as the source template.
+- Translators may use Poedit to create or edit `nvda.po` from `nvda.pot`; when Poedit saves and keeps `.po` and `.mo` synchronized, `build_i18n.py` is used to validate the translation.
+- If another translation tool edits `.po` but does not generate or synchronize `.mo`, use `build_i18n.py` to build the generated translation files and localized manifest.
+- Running `python build_i18n.py` with no arguments must open the numbered interactive menu by default.
+- Use `python build_i18n.py --all-languages` when automation needs to build or check every add-on locale without opening the interactive menu.
+- Numbered translation menus must put the broad/default choice first: all add-on locales before individual locales, default/all checks before individual check categories, and then any manual/custom entry.
+- Optional visible language sorting rules live at `googleTtsForNvda/locale/<language>/languageSort.json`.
+- `languageSort.json` affects only Voice Manager display order for translated language names; it must not change displayed names, package IDs, catalog data, download behavior, removal behavior, or runtime JSON.
+- If a locale has no valid `languageSort.json`, Voice Manager must keep catalog order for that locale.
+- Use `python build_i18n.py --extract-template` after adding or changing translatable UI strings.
+- Use `python build_i18n.py --check --language <language>` to validate one locale, or `python build_i18n.py --check` to validate all add-on locales.
+- Default translation checks include NVDA language code, manifest, documentation, UI strings, placeholders, language sorting, and obsolete source strings.
+- The `obsolete` check must fail active `.po` `msgid` entries that no longer exist in current Python `_()` strings or `manifest.ini`; commented `#~ msgid` entries from translation tools are ignored.
+- Custom checks can run individual categories such as `manifest`, `docs`, `ui`, `placeholders`, `sort`, or `obsolete`; `--checks all` runs every category.
+- Use `python build_i18n.py --language <language>` to build generated files only when the workflow relies on the script to generate `.mo` and localized `manifest.ini`.
+- `build.bat` must call `python build_i18n.py --all-languages` so release packaging builds every add-on locale non-interactively, then removes `__pycache__` created by syntax checks before packaging.
+- The English add-on author names are `Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong`.
+- For Vietnamese localization, write the authors as `Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương`.
+- When an author metadata line includes email addresses for Nguyen Anh Duc/Nguyễn Anh Đức and Dao Duc Trung/Đào Đức Trung, it must also include Pham Hung Vuong/Phạm Hùng Vương with `hungvuong106206@gmail.com`.
+- For Vietnamese UI text that names standard dialog buttons, translate button labels consistently: `OK` as `Đồng ý`, `Cancel` as `Hủy bỏ`, `Yes` as `Có`, and `No` as `Không`.
 
 ---
 
@@ -357,8 +388,8 @@ $zip.Dispose()
 ### Version management
 
 - Version is in `googleTtsForNvda/manifest.ini`, field `version`.
-- Current version: `0.2`.
-- Current authors: Dao Duc Trung and Nguyen Anh Duc.
+- Current version: `0.3`.
+- Current authors: Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong.
 - NVDA compatibility: `minimumNVDAVersion = 2024.1.0`, `lastTestedNVDAVersion = 2026.1.0`.
 - Increment `manifest.ini` before producing a release build.
 - Do not increment version for internal experiments unless the user asks for a build/release.

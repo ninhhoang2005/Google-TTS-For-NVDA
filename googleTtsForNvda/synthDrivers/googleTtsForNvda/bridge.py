@@ -37,7 +37,15 @@ try:
 except Exception:  # pragma: no cover - used by standalone smoke tests.
 	config = None  # type: ignore
 
-from .catalog import ENGINE_DIR, VoiceCatalog
+try:
+	import addonHandler
+
+	addonHandler.initTranslation()
+except Exception:  # pragma: no cover - used by standalone smoke tests.
+	def _(message: str) -> str:
+		return message
+
+from .catalog import ENGINE_DIR, VoiceCatalog, is_package_supported_by_engine
 from . import voice_store
 
 
@@ -102,7 +110,7 @@ class _ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 class _BridgeRequestHandler(http.server.SimpleHTTPRequestHandler):
-	server_version = "GoogleTtsForNvda/0.1"
+	server_version = "GoogleTtsForNvda/0.3"
 	extensions_map = {
 		**http.server.SimpleHTTPRequestHandler.extensions_map,
 		".wasm": "application/wasm",
@@ -379,9 +387,14 @@ class ChromeTtsBridge:
 
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
+		if not is_package_supported_by_engine(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not supported by the bundled Google TTS engine."),
+				f"Unsupported voice package for {package.id}.",
+			)
 		if not voice_store.is_package_installed(package):
 			raise _friendly_cdp_error(
-				"This Google TTS For NVDA voice package is not installed. Open Google TTS Voice Manager to install it.",
+				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
 				f"Missing voice package: {package.id}.",
 			)
 		self.ensure_connection()
@@ -417,9 +430,14 @@ class ChromeTtsBridge:
 		if not text.strip():
 			return {"success": True, "empty": True}
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
+		if not is_package_supported_by_engine(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not supported by the bundled Google TTS engine."),
+				f"Unsupported voice package for {package.id}.",
+			)
 		if not voice_store.is_package_installed(package):
 			raise _friendly_cdp_error(
-				"This Google TTS For NVDA voice package is not installed. Open Google TTS Voice Manager to install it.",
+				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
 				f"Missing voice package: {package.id}.",
 			)
 		self.ensure_connection()
@@ -486,7 +504,7 @@ class ChromeTtsBridge:
 			elif eventType == "error":
 				detail = str(event.get("message") or "Browser speech synthesis failed.")
 				raise _friendly_cdp_error(
-					"Google TTS For NVDA could not synthesize this text.",
+					_("Google TTS For NVDA could not speak this text."),
 					detail,
 				)
 
@@ -510,7 +528,7 @@ class ChromeTtsBridge:
 		result = response.get("result", {}).get("result", {})
 		if result.get("subtype") == "error":
 			raise _friendly_cdp_error(
-				"Google TTS For NVDA could not start speech in the browser runtime.",
+				_("Google TTS For NVDA could not start speech in the browser runtime."),
 				result.get("description") or "Browser speech evaluation failed.",
 			)
 		value = result.get("value")
@@ -587,7 +605,7 @@ class ChromeTtsBridge:
 		chromePath = self.find_chrome()
 		if not chromePath:
 			raise _friendly_cdp_error(
-				"Microsoft Edge or Google Chrome was not found. Install one of them or set EDGE_PATH/CHROME_PATH.",
+				_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
 				"No supported browser runtime executable was found.",
 			)
 		profileDir = self._get_chrome_profile_dir(chromePath)
@@ -732,7 +750,7 @@ class ChromeTtsBridge:
 			log.debug("Could not remove Google TTS Chrome session profile.", exc_info=True)
 
 	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
-		for _ in range(400):
+		for attempt in range(400):
 			_raise_if_cancelled(cancelEvent)
 			if self._chromeProcess is not None:
 				_hide_chrome_windows(self._chromeProcess.pid)
@@ -741,11 +759,14 @@ class ChromeTtsBridge:
 				self._chromeProcess = None
 				if exitCode == 21:
 					raise _friendly_cdp_error(
-						"The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover Microsoft Edge or Google Chrome helper processes.",
+						_(
+							"The browser profile used by Google TTS For NVDA is already in use. "
+							"Restart NVDA, or close any leftover Microsoft Edge or Google Chrome helper processes."
+						),
 						"Browser runtime exited with profile-in-use code 21.",
 					)
 				raise _friendly_cdp_error(
-					"The browser runtime closed before Google TTS For NVDA was ready.",
+					_("The browser runtime closed before Google TTS For NVDA was ready."),
 					f"Browser runtime exited before DevTools became available: {exitCode}",
 				)
 			if devToolsFile.is_file():
@@ -754,14 +775,14 @@ class ChromeTtsBridge:
 					return int(lines[0])
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
-			"Timed out waiting for the browser runtime to start.",
+			_("The browser runtime did not start in time."),
 			"Timed out waiting for browser DevTools.",
 		)
 
 	def _page_url(self) -> str:
 		if self._serverPort is None:
 			raise _friendly_cdp_error(
-				"Google TTS For NVDA could not start its local browser bridge.",
+				_("Google TTS For NVDA could not start its local browser bridge."),
 				"Bridge HTTP server is not running.",
 			)
 		return f"http://127.0.0.1:{self._serverPort}/"
@@ -770,10 +791,10 @@ class ChromeTtsBridge:
 		pageUrl = self._page_url()
 		if self._debugPort is None:
 			raise _friendly_cdp_error(
-				"The browser runtime is not ready yet.",
+				_("The browser runtime is not ready yet."),
 				"Browser DevTools port is not ready.",
 			)
-		for _ in range(200):
+		for attempt in range(200):
 			_raise_if_cancelled(cancelEvent)
 			if self._chromeProcess is not None:
 				_hide_chrome_windows(self._chromeProcess.pid)
@@ -795,7 +816,7 @@ class ChromeTtsBridge:
 						return wsUrl
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
-			"Google TTS For NVDA could not find its speech page in the browser runtime.",
+			_("Google TTS For NVDA could not find its speech page in the browser runtime."),
 			"Could not find browser speech page target.",
 		)
 
@@ -814,7 +835,7 @@ class ChromeTtsBridge:
 	) -> dict[str, Any]:
 		if self._ws is None:
 			raise _friendly_cdp_error(
-				"Google TTS For NVDA is not connected to the browser runtime.",
+				_("Google TTS For NVDA is not connected to the browser runtime."),
 				"Browser DevTools websocket is not connected.",
 			)
 		msgId = self._next_msg_id()
@@ -841,7 +862,7 @@ class ChromeTtsBridge:
 						continue
 					if not rawMessage:
 						raise _friendly_cdp_error(
-							"The browser runtime connection closed unexpectedly.",
+							_("The browser runtime connection closed unexpectedly."),
 							"Browser DevTools websocket closed.",
 						)
 					message = json.loads(rawMessage)
@@ -851,20 +872,20 @@ class ChromeTtsBridge:
 						continue
 					if "error" in message:
 						raise _friendly_cdp_error(
-							"The browser runtime reported an error while processing speech.",
+							_("The browser runtime reported an error while processing speech."),
 							f"CDP error for {method}: {message['error']}",
 						)
 					exceptionDetails = message.get("result", {}).get("exceptionDetails")
 					if isinstance(exceptionDetails, dict):
 						raise _friendly_cdp_error(
-							"The browser runtime reported an error while preparing speech.",
+							_("The browser runtime reported an error while preparing speech."),
 							self._format_exception(exceptionDetails),
 						)
 					return message
 			finally:
 				self._runtimeBusy = False
 		raise _friendly_cdp_error(
-			"Timed out waiting for the browser runtime to respond.",
+			_("The browser runtime did not respond in time."),
 			f"Timed out waiting for {method}.",
 		)
 
@@ -899,7 +920,7 @@ class ChromeTtsBridge:
 		&& typeof window.googleTtsForNvdaReady === "function"
 		&& window.googleTtsForNvdaReady() === true
 		"""
-		for _ in range(400):
+		for attempt in range(400):
 			_raise_if_cancelled(cancelEvent)
 			response = self._cdp_request(
 				"Runtime.evaluate",
@@ -911,7 +932,7 @@ class ChromeTtsBridge:
 				return
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
-			"Google TTS For NVDA could not finish loading the browser speech engine.",
+			_("Google TTS For NVDA could not finish loading the browser speech engine."),
 			"Browser speech harness did not finish loading.",
 		)
 

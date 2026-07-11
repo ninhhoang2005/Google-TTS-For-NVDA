@@ -38,13 +38,13 @@ def _open_synthesizer_dialog(parent: wx.Window | None = None) -> bool:
 		if dialogClass is None:
 			dialogClass = getattr(settingsDialogs, "SynthesizerDialog", None)
 		if dialogClass is None:
-			raise RuntimeError("Select Synthesizer dialog class was not found.")
+			raise RuntimeError(_("Select Synthesizer dialog class was not found."))
 		gui.mainFrame.popupSettingsDialog(dialogClass)
 		return True
 	except Exception as exc:
 		log.error("Could not open Select Synthesizer dialog: %s", exc)
 		gui.messageBox(
-			_("Could not open the Select Synthesizer dialog."),
+			_("The Select Synthesizer dialog could not be opened."),
 			_("Google TTS For NVDA"),
 			wx.OK | wx.ICON_ERROR,
 			parent or gui.mainFrame,
@@ -55,7 +55,7 @@ def _open_synthesizer_dialog(parent: wx.Window | None = None) -> bool:
 def _save_browser_runtime(runtime: str) -> None:
 	saved = browserBridge.set_configured_browser_runtime(runtime)
 	ui.message(
-		_("Google TTS For NVDA browser runtime set to {runtime}.").format(
+		_("Google TTS For NVDA will use {runtime} as its browser runtime.").format(
 			runtime=_runtime_label(saved),
 		),
 	)
@@ -64,7 +64,7 @@ def _save_browser_runtime(runtime: str) -> None:
 def _schedule_runtime_change_after_synth_switch(runtime: str, parent: wx.Window | None = None) -> None:
 	global _pendingRuntimeChange
 	_pendingRuntimeChange = runtime
-	ui.message(_("Waiting for you to switch from Google TTS For NVDA to another synthesizer before changing the browser runtime."))
+	ui.message(_("Waiting for you to switch away from Google TTS For NVDA before changing the browser runtime."))
 
 	def open_dialog_and_wait() -> None:
 		if _open_synthesizer_dialog(parent):
@@ -91,7 +91,7 @@ def _apply_runtime_after_synth_switch(runtime: str, attempts: int) -> None:
 		return
 	if attempts >= 600:
 		_pendingRuntimeChange = None
-		ui.message(_("The browser runtime was not changed because Google TTS For NVDA is still the current synthesizer."))
+		ui.message(_("The browser runtime was left unchanged because Google TTS For NVDA is still the current synthesizer."))
 		return
 	wx.CallLater(500, _apply_runtime_after_synth_switch, runtime, attempts + 1)
 
@@ -141,8 +141,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		if _is_google_synth_current() and selectedRuntime != effectiveRuntime:
 			answer = gui.messageBox(
 				_(
-					"Google TTS For NVDA is currently using the browser runtime. "
-					"Choose OK to open Select Synthesizer and switch to another synthesizer before changing the browser runtime. "
+					"Google TTS For NVDA is using the selected browser runtime now. "
+					"To change it safely, switch to another synthesizer first.\n\n"
+					"Choose OK to open Select Synthesizer. "
 					"Choose Cancel to keep the current browser runtime."
 				),
 				_("Google TTS For NVDA"),
@@ -165,7 +166,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 
 	def _effective_runtime_message(self) -> str:
 		if self._effectiveRuntime is None:
-			return _("No supported browser was found.")
+			return _("No supported browser runtime was found.")
 		return _("Active browser runtime: {runtime}").format(runtime=_runtime_label(self._effectiveRuntime))
 
 	def _select_saved_runtime(self) -> None:

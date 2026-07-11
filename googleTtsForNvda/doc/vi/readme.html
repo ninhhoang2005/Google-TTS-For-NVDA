@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="vi">
+<head>
+	<meta charset="utf-8">
+	<title>Google TTS Cho NVDA</title>
+</head>
+<body>
+	<h1>Google TTS Cho NVDA</h1>
+	<p><strong>Nhà phát triển:</strong> Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương.</p>
+	<p>Google TTS Cho NVDA sử dụng bộ máy WASM TTS của Google thông qua runtime trình duyệt headless được quản lý: Microsoft Edge hoặc Google Chrome.</p>
+	<p>Add-on này được phát triển từ một ước mơ giản dị: có thể dùng Google TTS như một bộ đọc NVDA thực tế hằng ngày trên máy tính Windows.</p>
+	<p>Add-on này cung cấp các giọng Google TTS dưới dạng một bộ đọc của NVDA, đồng thời có Voice Manager trong menu Công cụ để tải xuống hoặc gỡ bỏ các gói giọng được liệt kê trong danh mục <code>voices.json</code> đi kèm.</p>
+	<p>Các gói giọng đã biết là không hoạt động với bộ máy WASM TTS đi kèm sẽ được đánh dấu là không hỗ trợ trong Voice Manager và không xuất hiện như giọng của bộ đọc.</p>
+	<p>Các thiết lập gồm giọng, tốc độ, tăng tốc độ, cao độ, âm lượng và runtime trình duyệt. Gói giọng chỉ được tải xuống từ Google TTS Voice Manager.</p>
+	<p>Các cụm từ ngắn lặp lại dưới 5000 ký tự được lưu tạm trong RAM chỉ trong phiên NVDA hiện tại. Bộ nhớ tạm này không được ghi xuống ổ đĩa và sẽ tự động xóa khi thoát NVDA hoặc khởi động lại máy tính.</p>
+	<p>Khi dịch giao diện, nếu dùng Poedit để sửa bản dịch và lưu đồng bộ cả file <code>.po</code> lẫn <code>.mo</code>, có thể dùng <code>build_i18n.py</code> để kiểm tra bản dịch. Nếu dùng công cụ khác chỉ sửa <code>.po</code> mà không tạo hoặc đồng bộ <code>.mo</code>, script i18n này có thể tạo các file dịch được sinh tự động.</p>
+</body>
+</html>

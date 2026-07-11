@@ -11,7 +11,15 @@ import tempfile
 import threading
 import urllib.request
 
-from .catalog import VoiceCatalog, VoicePackage
+from .catalog import VoiceCatalog, VoicePackage, is_package_supported_by_engine
+
+try:
+	import addonHandler
+
+	addonHandler.initTranslation()
+except Exception:
+	def _(message: str) -> str:
+		return message
 
 
 ProgressCallback = Callable[[int | None, str], None]
@@ -183,7 +191,8 @@ def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
 	return [
 		package
 		for package in installed
-		if not package.dependentVoiceId or package.dependentVoiceId in installedIds
+		if is_package_supported_by_engine(package)
+		and (not package.dependentVoiceId or package.dependentVoiceId in installedIds)
 	]
 
 
@@ -199,10 +208,10 @@ def remove_package(package: VoicePackage) -> None:
 def download_package(package: VoicePackage, progress: ProgressCallback | None = None) -> Path:
 	if is_package_installed(package):
 		if progress:
-			progress(100, f"{package.id} is already installed.")
+			progress(100, _("{package} is already installed.").format(package=package.id))
 		return package_file(package)
 	if not package.url:
-		raise RuntimeError(f"No download link is available for voice package {package.id}.")
+		raise RuntimeError(_("No download link is available for voice package {package}.").format(package=package.id))
 	target = package_file(package)
 	target.parent.mkdir(parents=True, exist_ok=True)
 	tmp = target.with_suffix(".download")
@@ -211,7 +220,7 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 	except FileNotFoundError:
 		pass
 	if progress:
-		progress(0, f"Downloading {package.id}.")
+		progress(0, _("Downloading {package}.").format(package=package.id))
 	request = urllib.request.Request(package.url, headers={"User-Agent": "NVDA Google TTS"})
 	with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
 		total = int(response.headers.get("Content-Length") or package.compressedSize or 0)
@@ -222,21 +231,29 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 			output.write(chunk)
 			downloaded += len(chunk)
 			if progress and total:
-				progress(min(99, int(downloaded * 100 / total)), f"Downloading {package.id}.")
+				progress(min(99, int(downloaded * 100 / total)), _("Downloading {package}.").format(package=package.id))
 	if package.compressedSize and tmp.stat().st_size != package.compressedSize:
 		tmp.unlink(missing_ok=True)
-		raise RuntimeError(f"Voice package {package.id} did not pass verification after download. Please try downloading it again.")
+		raise RuntimeError(
+			_("Voice package {package} did not pass verification after download. Please try downloading it again.").format(
+				package=package.id
+			)
+		)
 	if package.sha256Checksum:
 		actualHash = sha256(tmp)
 		if actualHash.lower() != package.sha256Checksum.lower():
 			tmp.unlink(missing_ok=True)
-			raise RuntimeError(f"Voice package {package.id} did not pass verification after download. Please try downloading it again.")
+			raise RuntimeError(
+				_("Voice package {package} did not pass verification after download. Please try downloading it again.").format(
+					package=package.id
+				)
+			)
 	else:
 		actualHash = None
 	os.replace(tmp, target)
 	_remember_verified_package(package, target.stat(), actualHash)
 	if progress:
-		progress(100, f"Installed {package.id}.")
+		progress(100, _("Installed {package}.").format(package=package.id))
 	return target
 
 
@@ -247,5 +264,5 @@ def copy_existing_package(source: Path, package: VoicePackage) -> Path:
 	_forget_verified_package(package.id)
 	if not is_package_installed(package):
 		target.unlink(missing_ok=True)
-		raise RuntimeError(f"Voice package {package.id} did not pass verification after import.")
+		raise RuntimeError(_("Voice package {package} did not pass verification after import.").format(package=package.id))
 	return target

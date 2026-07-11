@@ -22,6 +22,8 @@ REQUIRED_ENGINE_FILES = (
 	"streaming_worklet_processor.js",
 	"voices.json",
 )
+# The bundled engine reports these package families as unavailable even when their .zvoice files verify.
+UNSUPPORTED_ENGINE_PACKAGE_ID_PARTS = ("locomel", "lemonbalm")
 
 
 class EngineLibraryError(RuntimeError):
@@ -81,6 +83,11 @@ def package_id_to_language(packageId: str) -> str:
 	if not match:
 		return packageId
 	return f"{match.group(1).lower()}-{match.group(2).upper()}"
+
+
+def is_package_supported_by_engine(package: "VoicePackage") -> bool:
+	packageId = package.id.lower()
+	return not any(part in packageId for part in UNSUPPORTED_ENGINE_PACKAGE_ID_PARTS)
 
 
 def _safe_str(value: Any, default: str = "") -> str:

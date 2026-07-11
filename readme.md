@@ -1,14 +1,16 @@
 # Google TTS For NVDA
 
-An NVDA screen reader synthesizer add-on that leverages Google's WebAssembly (WASM) Text-to-Speech engine through a supported browser runtime (Microsoft Edge or Google Chrome) to provide high-quality, natural-sounding voices offline.
+An NVDA screen reader synthesizer add-on that uses Google's WebAssembly (WASM) Text-to-Speech engine locally through a supported browser runtime (Microsoft Edge or Google Chrome) to provide high-quality, natural-sounding voices offline.
 
-*This add-on is co-developed by [Nguyen Anh Duc](https://github.com/nguyenanhduc09) and [Dao Duc Trung](https://github.com/daoductrung).*
+This project grew from a simple dream: making Google TTS usable as a practical, everyday NVDA synthesizer on Windows computers.
+
+*This add-on is co-developed by [Nguyen Anh Duc](https://github.com/nguyenanhduc09), [Dao Duc Trung](https://github.com/daoductrung) and [Pham Hung Vuong](https://github.com/phamhungvuong302).*
 
 ---
 
 ## Current Status
 
-This add-on is currently being actively maintained and developed by Nguyen Anh Duc and Dao Duc Trung. While functional, there are still a few known issues we are working on:
+This add-on is currently being actively maintained and developed by Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong. While functional, there are still a few known issues we are working on:
 * Voices may load slowly upon the first initialization.
 * Pauses and speech segmentation might occasionally be incorrect.
 
@@ -56,20 +58,35 @@ The synthesizer supports the standard NVDA Speech settings ring:
 
 ---
 
-## Build Instructions (For Developers)
+## Build Instructions (For Advanced Users)
 
 To package the add-on yourself:
 
 1. Clone this repository using `git clone https://github.com/nguyenanhduc09/Google-TTS-For-NVDA.git` and navigate to the directory.
 2. Make sure you have **Python** and **Node.js** installed on your system.
-3. Run the automated build script by executing `build.bat` in your command line.
-4. The verified `.nvda-addon` package will be created in the `dist/` directory.
+3. Run the automated build script:
+
+```bat
+build.bat
+```
+
+The build script reads the version from `googleTtsForNvda/manifest.ini`, builds all add-on locales non-interactively, checks Python and JavaScript syntax, verifies that no `.zvoice` voice packages are inside the source tree, removes generated `__pycache__` folders, and packages the add-on.
+
+The verified `.nvda-addon` package will be created in the `dist/` directory, with a name like:
+
+```text
+dist/googleTtsForNvda-0.3.nvda-addon
+```
+
+If you only want to validate or update translation files without packaging the add-on, use `build_i18n.py` directly. Running `python build_i18n.py` opens the numbered translation menu. For automation, use `python build_i18n.py --check --all-languages` to check all locales or `python build_i18n.py --all-languages` to build generated translation files for all locales.
 
 ---
 
 ## Contributing
 
 We strongly welcome contributions from other developers! If you have ideas, bug fixes, or improvements, please feel free to open an issue or submit a pull request.
+
+Translations are welcome too. If you use Poedit to edit a translation and save synchronized `.po` and `.mo` files, `build_i18n.py` can be used to validate the result. If you use another translation tool that edits `.po` without generating or synchronizing `.mo`, the i18n script can build the generated files for you. Running `python build_i18n.py` opens the numbered translation menu by default, with broad choices first: all add-on locales before individual locales, and default/all checks before individual check categories. See [`TRANSLATING.md`](TRANSLATING.md) for the add-on's translation layout, validation commands, and optional `languageSort.json` files that let Voice Manager display language names in a natural order for each locale without changing catalog data.
 
 ---
 
@@ -78,3 +95,4 @@ We strongly welcome contributions from other developers! If you have ideas, bug 
 If you have any questions, feedback, or need support, feel free to reach out to us via email or Telegram:
 * **Nguyen Anh Duc**: [ducna1803@gmail.com](mailto:ducna1803@gmail.com) | Telegram: [t.me/anhduc1803](https://t.me/anhduc1803)
 * **Dao Duc Trung**: [trung@ddt.one](mailto:trung@ddt.one) | Telegram: [t.me/Daoductrung](https://t.me/Daoductrung)
+* **Pham Hung Vuong**: [hungvuong106206@gmail.com](mailto:hungvuong106206@gmail.com) | Telegram: [t.me/phamhungvuong302](https://t.me/phamhungvuong302)

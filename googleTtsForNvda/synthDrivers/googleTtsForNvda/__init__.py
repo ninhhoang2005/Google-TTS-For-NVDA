@@ -63,7 +63,7 @@ _SENTENCE_TERMINATOR_RE = re.compile(
 
 class SynthDriver(synthDriverHandler.SynthDriver):
 	name = "googleTtsForNvda"
-	description = "Google TTS For NVDA"
+	description = _("Google TTS For NVDA")
 	supportedSettings = (
 		synthDriverHandler.SynthDriver.VoiceSetting(),
 		synthDriverHandler.SynthDriver.RateSetting(),
@@ -100,28 +100,34 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			# not blocked by a modal dialog waiting for user input.
 			wx.CallAfter(self._prompt_for_voice_install)
 			raise RuntimeError(
-				"No Google TTS For NVDA voice packages are installed. "
-				"Open Google TTS Voice Manager to download a voice package."
+				_(
+					"No Google TTS For NVDA voice packages are installed. "
+					"Open Google TTS Voice Manager to download a voice package."
+				)
 			)
 		self.catalog = VoiceCatalog(installedPackages)
 		if not self.catalog.speakers:
 			wx.CallAfter(
 				self._prompt_for_voice_install,
 				_(
-					"No usable Google TTS For NVDA voices are available.\n\n"
+					"No installed Google TTS For NVDA voices can be used.\n\n"
 					"Press OK to open Google TTS Voice Manager and install another voice package.\n"
-					"Press Cancel to keep using your current synthesizer."
+					"Press Cancel to keep using your current synthesizer for now."
 				),
 			)
 			raise RuntimeError(
-				"Installed Google TTS For NVDA voice packages do not contain any usable voices. "
-				"Open Google TTS Voice Manager to install another voice package."
+				_(
+					"The installed Google TTS For NVDA voice packages do not include any voices this engine can use. "
+					"Open Google TTS Voice Manager to install another voice package."
+				)
 			)
 		if ChromeTtsBridge.find_chrome() is None:
 			wx.CallAfter(self._show_missing_chrome_error)
 			raise RuntimeError(
-				"Microsoft Edge or Google Chrome was not found. "
-				"Install one of them or set EDGE_PATH/CHROME_PATH."
+				_(
+					"Microsoft Edge or Google Chrome was not found. "
+					"Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."
+				)
 			)
 		self.availableVoices = self._build_available_voices()
 		self.availableLanguages = {speaker.language for speaker in self.catalog.speakers}
@@ -178,7 +184,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					message or _(
 						"No Google TTS For NVDA voices are installed.\n\n"
 						"Press OK to open Google TTS Voice Manager and download a voice package.\n"
-						"Press Cancel to keep using your current synthesizer.\n\n"
+						"Press Cancel to keep using your current synthesizer for now.\n\n"
 						"You can also open Voice Manager later from NVDA Menu > Tools > "
 						"Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
 					),
@@ -237,7 +243,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			import gui
 
 			gui.messageBox(
-				_("Microsoft Edge or Google Chrome was not found. Install one of them or set EDGE_PATH/CHROME_PATH."),
+				_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
 				_("Google TTS For NVDA"),
 				wx.OK | wx.ICON_ERROR,
 				gui.mainFrame,
