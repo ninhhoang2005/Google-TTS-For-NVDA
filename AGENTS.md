@@ -255,7 +255,7 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 | Add-on data root | `{configPath}/googleTtsForNvda/` |
 | Downloaded voices | `{configPath}/googleTtsForNvda/voices/` |
 | Runtime voices.json | `{configPath}/googleTtsForNvda/runtime/voices.json` |
-| Browser profiles | `{configPath}/googleTtsForNvda/chromeProfiles/session-*` |
+| Browser profiles | `%LOCALAPPDATA%/GoogleTtsForNvda/browserProfiles/session-*` |
 | Master catalog | `WasmTtsEngine/20260625.1/voices.json` |
 
 ### `voice_store` contract
@@ -296,6 +296,8 @@ When modifying `voiceManager.py` or any UI:
 - On open, call `wx.CallAfter(self.focus_default_control)`.
 - After operations, move focus to the most relevant list/control.
 - Errors must be visible to screen-reader users, not only logged.
+- Per-tab **Filter by language** comboboxes must retain independent selection state per tab and announce item counts clearly when filtered.
+- Ensure the **Open voice packages folder** button correctly launches the system file explorer pointing to the installed voice directory.
 
 ---
 
