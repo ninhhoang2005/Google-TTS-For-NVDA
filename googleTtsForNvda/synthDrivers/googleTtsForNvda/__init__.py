@@ -192,7 +192,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	_AUTO_LANGUAGE_NOTICE_SETTING = ReadOnlyTextDriverSetting(
 		_AUTO_LANGUAGE_NOTICE_ID,
 		_("Auto-detect status"),
-		availableInSettingsRing=False,
+		availableInSettingsRing=True,
 		useConfig=False,
 		defaultVal=_AUTO_LANGUAGE_NOTICE_ID,
 	)
@@ -574,7 +574,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				yield from flush_text()
 				if cancelEvent.is_set():
 					return
-				activeLanguage = getattr(item, "lang", None)
+				activeLanguage = getattr(item, "googleTtsForNvdaLanguage", None) or getattr(item, "lang", None)
 				activeVoice = self._voice_for_language(activeLanguage, voice)
 			elif itemType is RateCommand:
 				yield from flush_text()
@@ -1234,7 +1234,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			voiceLanguage = self.catalog.language_for_voice(voice)
 		except Exception:
 			return False
-		return self._normalize_language(voiceLanguage) == self._normalize_language(language)
+		return self._language_matches(voiceLanguage, language)
 
 	def _auto_language_notice_message(self) -> str:
 		return _(
@@ -1279,7 +1279,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		languageKey = self._normalize_language(language)
 		if not languageKey:
 			return {}
-		return self._auto_language_profiles().get(languageKey, {})
+		profiles = self._auto_language_profiles()
+		profile = profiles.get(languageKey)
+		if profile is not None:
+			return profile
+		languageKeys = self._language_match_keys(language)
+		for profileLanguage, profile in profiles.items():
+			if self._language_match_keys(profileLanguage).intersection(languageKeys):
+				return profile
+		return {}
 
 	def _profile_int(self, value: Any, default: int) -> int:
 		try:
@@ -1338,9 +1346,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		return candidateLanguages[0] if candidateLanguages else fallbackLanguage
 
 	def _auto_language_candidate_for_language(self, language: str | None, candidateLanguages: list[str]) -> str:
-		languageKey = self._normalize_language(language)
+		languageKeys = self._language_match_keys(language)
 		for candidate in candidateLanguages:
-			if self._normalize_language(candidate) == languageKey:
+			if self._language_match_keys(candidate).intersection(languageKeys):
 				return candidate
 		languageRoot = self._language_root(language)
 		for candidate in candidateLanguages:
@@ -1456,10 +1464,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		if not normalizedLang:
 			return fallbackVoice
 		fallbackSpeaker = self.catalog.speaker_for_voice(fallbackVoice)
-		if self._normalize_language(fallbackSpeaker.language) == normalizedLang:
+		if self._language_matches(fallbackSpeaker.language, normalizedLang):
 			return fallbackVoice
 		for speaker in self.catalog.speakers:
-			if self._normalize_language(speaker.language) == normalizedLang:
+			if self._language_matches(speaker.language, normalizedLang):
 				return speaker.id
 		rootLang = normalizedLang.split("-", 1)[0]
 		if self._normalize_language(fallbackSpeaker.language).split("-", 1)[0] == rootLang:
@@ -1471,6 +1479,34 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def _normalize_language(self, lang: str | None) -> str:
 		return str(lang or "").replace("_", "-").lower()
+
+	def _language_match_keys(self, language: str | None) -> set[str]:
+		key = self._normalize_language(language)
+		if not key:
+			return set()
+		aliases = {key}
+		aliasMap = {
+			"cmn-cn": {"zh-cn"},
+			"zh-cn": {"cmn-cn"},
+			"cmn-tw": {"zh-tw"},
+			"zh-tw": {"cmn-tw"},
+			"yue-hk": {"zh-hk"},
+			"zh-hk": {"yue-hk"},
+			"zh": {"cmn-cn", "cmn-tw", "yue-hk"},
+			"fil-ph": {"tl", "fil"},
+			"tl": {"fil-ph", "fil"},
+			"ar-xa": {"ar"},
+			"ar": {"ar-xa"},
+		}
+		aliases.update(aliasMap.get(key, set()))
+		if key.startswith("fil-"):
+			aliases.update({"fil", "tl"})
+		return aliases
+
+	def _language_matches(self, left: str | None, right: str | None) -> bool:
+		leftKeys = self._language_match_keys(left)
+		rightKeys = self._language_match_keys(right)
+		return bool(leftKeys and rightKeys and leftKeys.intersection(rightKeys))
 
 	def _rate_to_chrome(self, value: int, rateBoost: bool | None = None) -> float:
 		percent = max(0, min(100, value)) / 100.0
