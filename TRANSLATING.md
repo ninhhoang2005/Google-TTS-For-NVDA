@@ -105,6 +105,8 @@ googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po
 googleTtsForNvda/doc/<language>/readme.html
 ```
 
+When translating user documentation, check your locale's `nvda.po` and existing localized UI wording first. Reuse those exact terms for menu paths, dialog names, settings, status labels, and gesture-management wording instead of inventing synonyms. For Vietnamese, follow the terms already used in `googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.po`, such as `Google TTS Cho NVDA`, `cấu hình`, `hồ sơ ngôn ngữ tự động`, `Trình quản lý giọng Google TTS`, and `Quản lý cử chỉ`.
+
 6. If your language needs a custom alphabetic order for language names in Voice Manager, see [Visible language sorting](#visible-language-sorting).
 7. Run:
 

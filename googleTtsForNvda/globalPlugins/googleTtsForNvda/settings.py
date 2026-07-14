@@ -75,14 +75,22 @@ def _nvda_label(message: str) -> str:
 	return message
 
 
-def _focusable_status_text(parent: wx.Window, message: str, name: str) -> wx.TextCtrl:
-	control = wx.TextCtrl(
-		parent,
-		value=message,
-		style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
-	)
-	control.SetName(name)
-	return control
+def bind_read_only_text_focus_announcement(control: wx.TextCtrl) -> None:
+	def announce_value() -> None:
+		try:
+			if wx.Window.FindFocus() is not control:
+				return
+			message = control.GetValue().strip()
+			if message:
+				ui.message(message)
+		except Exception:
+			log.debug("Could not announce Google TTS read-only status text.", exc_info=True)
+
+	def on_focus(evt: wx.FocusEvent) -> None:
+		evt.Skip()
+		wx.CallAfter(announce_value)
+
+	control.Bind(wx.EVT_SET_FOCUS, on_focus)
 
 
 def _bind_slider_page_keys(slider: wx.Slider) -> None:
@@ -221,10 +229,13 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 		self.runtimeChoice.SetSelection(self._runtimeValues.index(self._savedRuntime))
 		self.runtimeChoice.SetName(_("Browser runtime"))
-		self.effectiveRuntimeText = helper.addItem(
-			_focusable_status_text(self, self._effective_runtime_message(), _("Browser runtime status")),
-			flag=wx.EXPAND,
+		self.effectiveRuntimeText = helper.addLabeledControl(
+			_("Browser runtime status") + ":",
+			wx.TextCtrl,
+			value=self._effective_runtime_message(),
+			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 		)
+		self.effectiveRuntimeText.SetName(_("Browser runtime status"))
 
 		self.autoLanguageCheck = helper.addItem(
 			wx.CheckBox(self, label=_("&Use automatic language profiles")),
@@ -331,10 +342,14 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			self.autoProfileSpellingCheck,
 		)
 		self._load_selected_auto_language_profile()
-		self.autoLanguageStatusText = helper.addItem(
-			_focusable_status_text(self, self._auto_language_status_message(), _("Automatic language profiles status")),
-			flag=wx.EXPAND,
+		self.autoLanguageStatusText = helper.addLabeledControl(
+			_("Automatic language profiles status") + ":",
+			wx.TextCtrl,
+			value=self._auto_language_status_message(),
+			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 		)
+		self.autoLanguageStatusText.SetName(_("Automatic language profiles status"))
+		bind_read_only_text_focus_announcement(self.autoLanguageStatusText)
 		self._refresh_auto_language_controls()
 		settingsSizer.Fit(self)
 

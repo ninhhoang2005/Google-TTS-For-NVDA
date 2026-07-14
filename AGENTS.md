@@ -203,6 +203,7 @@ Automatic language profiles deliberately have their own profile system and must 
 - Profile voices must be installed and must match the selected profile language. If a saved profile references a missing or mismatched voice, fall back to an installed voice for that language.
 - The Google TTS settings panel must keep the language profile list accessible: use a normal language choice control, a clear checkbox for "Use this language profile", and ordinary labeled controls for profile values. Do not use a multi-column table for these profile controls.
 - Status/help lines in Speech Settings and the Google TTS settings category must be reachable by Tab and read by NVDA. Use focusable read-only controls for these status lines instead of plain `wx.StaticText`.
+- Focusable status/help controls must have a real label association, not only `SetName()`, so NVDA announces the status name before the read-only edit role. If the status/help text can wrap or span multiple lines, make focus announce the complete current message while still allowing arrow-key review inside the read-only edit.
 - The Google TTS settings category status line for automatic language profiles must describe the current state, not only the enabled behavior:
   - no installed language voice packages: prompt the user to install at least one language voice package;
   - automatic language profiles off: explain that Google TTS is using NVDA's normal Speech Settings values;
@@ -230,6 +231,7 @@ Automatic language profiles deliberately have their own profile system and must 
 - Use NVDA-style property methods: `_get_propertyName()` and `_set_propertyName()`.
 - Keep `cachePropertiesByDefault = False`.
 - Preserve compatibility with NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds. When hooking NVDA APIs whose signatures changed across these versions, use compatibility wrappers like the `setSynth` hook rather than assuming only one signature.
+- When a task provides or names a local NVDA source-code directory, inspect the relevant NVDA versions available there and prefer an implementation compatible across those versions, especially for scripts, input gestures, settings dialogs, speech processing hooks, and other NVDA internals used by this add-on.
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
 - Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.
 - Do not import NVDA-only modules unguarded in modules that may be imported by tests. Existing try/except patterns for `logHandler`, `addonHandler`, and `globalVars` are intentional.

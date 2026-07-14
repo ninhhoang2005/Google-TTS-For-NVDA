@@ -38,7 +38,7 @@ from synthDrivers.googleTtsForNvda.bridge import (
 from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatalog
 from synthDrivers.googleTtsForNvda import voice_store
 
-from .settings import GoogleTtsSettingsPanel
+from .settings import GoogleTtsSettingsPanel, bind_read_only_text_focus_announcement
 from .voiceManager import VoiceManagerDialog
 
 
@@ -341,6 +341,7 @@ def _make_read_only_text_setting_control(self: Any, setting: Any, settingsStorag
 	)
 	edit = labeledControl.control
 	edit.SetName(str(getattr(setting, "displayName", setting.id)))
+	bind_read_only_text_focus_announcement(edit)
 	setattr(self, f"{setting.id}Edit", edit)
 	setattr(self, f"{setting.id}List", edit)
 	try:
@@ -1026,6 +1027,10 @@ def _close_voice_manager() -> None:
 		_dialog = None
 
 
+def _open_google_tts_settings() -> None:
+	gui.mainFrame.popupSettingsDialog(gui.settingsDialogs.NVDASettingsDialog, GoogleTtsSettingsPanel)
+
+
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	scriptCategory = _("Google TTS For NVDA")
 
@@ -1076,6 +1081,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		_open_voice_manager()
 
 	script_openVoiceManager.__doc__ = _("Opens the Google TTS Voice Manager.")
+
+	def script_openSettings(self, gesture: Any) -> None:
+		_open_google_tts_settings()
+
+	script_openSettings.__doc__ = _("Opens the Google TTS For NVDA settings.")
 
 	__gestures = {
 		"kb:NVDA+control+shift+g": "openVoiceManager",

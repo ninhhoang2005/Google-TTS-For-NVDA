@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Google TTS Cho NVDA 0.3\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-07-10 00:00+0700\n"
-"PO-Revision-Date: 2026-07-14 17:50+0700\n"
+"PO-Revision-Date: 2026-07-14 22:04+0700\n"
 "Last-Translator: Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương\n"
 "Language-Team: Vietnamese\n"
 "Language: vi\n"
@@ -369,6 +369,9 @@ msgstr "Tiếng Odia"
 
 msgid "Opens the Google TTS Voice Manager."
 msgstr "Mở Trình quản lý giọng Google TTS."
+
+msgid "Opens the Google TTS For NVDA settings."
+msgstr "Mở cấu hình Google TTS Cho NVDA."
 
 msgid "Package"
 msgstr "Gói"
