@@ -476,227 +476,170 @@ class CdpDispatcher:
 					ev.set()
 
 
-class ChromeTtsBridge:
-	def __init__(self, catalog: VoiceCatalog | None = None) -> None:
-		self.catalog = catalog or VoiceCatalog.load()
+class BrowserProcessManager:
+	"""Manages browser executable discovery, profile directories, HTTP server, and subprocess lifecycle."""
+
+	def __init__(self, catalog: VoiceCatalog) -> None:
+		self.catalog = catalog
 		self._server: _ThreadingTcpServer | None = None
 		self._serverThread: threading.Thread | None = None
 		self._serverPort: int | None = None
 		self._chromeProcess: subprocess.Popen[bytes] | None = None
 		self._debugPort: int | None = None
-		self._ws: websocket.WebSocket | None = None
-		self._dispatcher: CdpDispatcher | None = None
-		self._lock = threading.RLock()
-		self._msgIdLock = threading.Lock()
-		self._stopLock = threading.Lock()
-		self._msgId = 0
 		self._profileDir: Path | None = None
-		self._lastStopSentAt = 0.0
-		self._runtimeBusy = False
+		self._lock = threading.RLock()
 
 	@classmethod
 	def find_chrome(cls) -> str | None:
 		return find_browser()
 
-	def ensure_connection(self) -> None:
+	@property
+	def chrome_process(self) -> subprocess.Popen[bytes] | None:
+		return self._chromeProcess
+
+	@property
+	def debug_port(self) -> int | None:
+		return self._debugPort
+
+	@property
+	def server_port(self) -> int | None:
+		return self._serverPort
+
+	def start_server(self) -> int:
 		with self._lock:
-			if self._ws is not None and self._ws.connected and self._dispatcher is not None:
-				return
-			try:
-				self._start_server()
-				self._start_chrome()
-				wsUrl = self._get_page_websocket_url()
-				self._ws = websocket.create_connection(wsUrl, timeout=15)
-				self._ws.settimeout(0.05)
-				self._dispatcher = CdpDispatcher(self._ws)
-				self._dispatcher.start()
-				self._cdp_request("Runtime.enable", timeout=15)
-				self._cdp_request("Page.enable", timeout=15)
-				self._cdp_request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
-				self._wait_until_ready()
-			except Exception:
-				self._close_websocket()
-				raise
+			if self._server is not None and self._serverPort is not None:
+				return self._serverPort
+			runtimeDir = voice_store.data_root() / "runtime"
+			runtimeDir.mkdir(parents=True, exist_ok=True)
+			(runtimeDir / "voices.json").write_text(self.catalog.to_runtime_json(), encoding="utf-8")
+			self._server = _ThreadingTcpServer(("127.0.0.1", 0), _BridgeRequestHandler)
+			self._serverPort = int(self._server.server_address[1])
+			self._serverThread = threading.Thread(
+				name="googleTtsForNvda.http",
+				target=self._server.serve_forever,
+				daemon=True,
+			)
+			self._serverThread.start()
+			return self._serverPort
 
-	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
-		package = self.catalog.package_for_voice(str(options["voiceId"]))
-		if not is_package_supported_by_engine(package):
-			raise _friendly_cdp_error(
-				_("This voice package is not supported by the bundled Google TTS engine."),
-				f"Unsupported voice package for {package.id}.",
-			)
-		if not voice_store.is_package_installed(package):
-			raise _friendly_cdp_error(
-				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
-				f"Missing voice package: {package.id}.",
-			)
-		self.ensure_connection()
-		_raise_if_cancelled(cancelEvent)
-		payload = {
-			"sessionId": f"preload-{time.monotonic_ns()}",
-			"voiceName": options["voiceName"],
-			"lang": options["lang"],
-			"text": str(options.get("warmupText") or "a"),
-		}
-		response = self._cdp_request(
-			"Runtime.evaluate",
-			{
-				"expression": f"window.googleTtsForNvdaPreload({json.dumps(payload, ensure_ascii=False)})",
-				"awaitPromise": True,
-				"returnByValue": True,
-				"userGesture": True,
-				"timeout": 60000,
-			},
-			timeout=70,
-			cancelEvent=cancelEvent,
-		)
-		value = response.get("result", {}).get("result", {}).get("value")
-		return value if isinstance(value, dict) else {"success": True}
-
-	def speak(
-		self,
-		text: str,
-		options: dict[str, Any],
-		onAudio: AudioCallback,
-		cancelEvent: threading.Event | None = None,
-		onMark: MarkCallback | None = None,
-		segments: list[str] | None = None,
-	) -> dict[str, Any]:
-		if not text.strip():
-			return {"success": True, "empty": True}
-		package = self.catalog.package_for_voice(str(options["voiceId"]))
-		if not is_package_supported_by_engine(package):
-			raise _friendly_cdp_error(
-				_("This voice package is not supported by the bundled Google TTS engine."),
-				f"Unsupported voice package for {package.id}.",
-			)
-		if not voice_store.is_package_installed(package):
-			raise _friendly_cdp_error(
-				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
-				f"Missing voice package: {package.id}.",
-			)
-		self.ensure_connection()
-		_raise_if_cancelled(cancelEvent)
-		sessionId = f"{time.monotonic_ns()}"
-		payload = {
-			"sessionId": sessionId,
-			"text": text,
-			"voiceName": options["voiceName"],
-			"lang": options["lang"],
-			"rate": options["rate"],
-			"artificialRate": options.get("artificialRate", 1),
-			"pitch": options["pitch"],
-			"volume": options["volume"],
-			"outputGain": options.get("outputGain", options["volume"]),
-		}
-		if segments:
-			payload["segments"] = segments
-		state: dict[str, Any] = {"audioChunks": 0, "done": False}
-		startedAt = time.perf_counter()
-		firstAudioAt: float | None = None
-
-		def handle_event(message: dict[str, Any]) -> None:
-			nonlocal firstAudioAt
-			if message.get("method") != "Runtime.bindingCalled":
-				return
-			params = message.get("params") or {}
-			if params.get("name") != BINDING_NAME:
-				return
-			rawPayload = params.get("payload")
-			if not isinstance(rawPayload, str):
-				return
-			event = json.loads(rawPayload)
-			if event.get("sessionId") != sessionId:
-				return
-			eventType = event.get("type")
-			if eventType == "started":
-				log.debug(
-					"Google TTS session %s started in Chromium after %.1f ms.",
-					sessionId,
-					(time.perf_counter() - startedAt) * 1000,
-				)
-			elif eventType == "audio":
-				if cancelEvent is not None and cancelEvent.is_set():
-					raise CdpCancelled()
-				audio = base64.b64decode(str(event.get("data") or ""))
-				if audio:
-					if cancelEvent is not None and cancelEvent.is_set():
-						raise CdpCancelled()
-					if firstAudioAt is None:
-						firstAudioAt = time.perf_counter()
-						log.debug(
-							"Google TTS session %s first audio after %.1f ms.",
-							sessionId,
-							(firstAudioAt - startedAt) * 1000,
-						)
-					state["audioChunks"] += 1
-					onAudio(audio)
-			elif eventType == "mark":
-				if onMark is not None:
-					try:
-						onMark(max(0, int(event.get("charIndex") or 0)))
-					except (TypeError, ValueError):
-						pass
-			elif eventType == "done":
-				state["done"] = True
-			elif eventType == "error":
-				detail = str(event.get("message") or "Browser speech synthesis failed.")
+	def start_browser(self, cancelEvent: threading.Event | None = None) -> tuple[int, int]:
+		with self._lock:
+			self.start_server()
+			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
+				if self._debugPort is not None and self._serverPort is not None:
+					return self._serverPort, self._debugPort
+				with suppress(Exception):
+					self._chromeProcess.terminate()
+					self._chromeProcess.wait(timeout=2)
+				with suppress(Exception):
+					self._chromeProcess.kill()
+				self._chromeProcess = None
+				self._debugPort = None
+			_raise_if_cancelled(cancelEvent)
+			chromePath = self.find_chrome()
+			if not chromePath:
 				raise _friendly_cdp_error(
-					_("Google TTS For NVDA could not speak this text."),
-					detail,
+					_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
+					"No supported browser runtime executable was found.",
 				)
-
-		expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
-		try:
-			response = self._cdp_request(
-				"Runtime.evaluate",
-				{
-					"expression": expression,
-					"awaitPromise": True,
-					"returnByValue": True,
-					"userGesture": True,
-					"timeout": 120000,
-				},
-				timeout=130,
-				eventHandler=handle_event,
-				cancelEvent=cancelEvent,
+			profileDir = self._get_chrome_profile_dir(chromePath)
+			devToolsFile = profileDir / "DevToolsActivePort"
+			try:
+				devToolsFile.unlink()
+			except FileNotFoundError:
+				pass
+			pageUrl = self._page_url()
+			args = [
+				chromePath,
+				"--headless=new",
+				"--remote-debugging-port=0",
+				"--remote-allow-origins=*",
+				f"--user-data-dir={profileDir}",
+				"--no-first-run",
+				"--no-default-browser-check",
+				"--disable-background-networking",
+				"--disable-breakpad",
+				"--disable-crash-reporter",
+				"--disable-gpu",
+				"--noerrdialogs",
+				"--autoplay-policy=no-user-gesture-required",
+				"--window-position=-32000,-32000",
+				"--window-size=1,1",
+				"--disable-background-timer-throttling",
+				"--disable-backgrounding-occluded-windows",
+				"--disable-renderer-backgrounding",
+				"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
+				"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+				"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
+				"--enable-wasm-simd",
+				pageUrl,
+			]
+			self._chromeProcess = subprocess.Popen(
+				args,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+				**_hidden_chrome_startup_kwargs(),
 			)
-		except CdpCancelled:
-			raise
-		result = response.get("result", {}).get("result", {})
-		if result.get("subtype") == "error":
+			_hide_chrome_windows(self._chromeProcess.pid)
+			_elevate_chrome_priority(self._chromeProcess.pid)
+			try:
+				self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+				_hide_chrome_windows(self._chromeProcess.pid)
+			except Exception:
+				with suppress(Exception):
+					self._chromeProcess.terminate()
+					self._chromeProcess.wait(timeout=2)
+				with suppress(Exception):
+					self._chromeProcess.kill()
+				self._chromeProcess = None
+				self._debugPort = None
+				self._remove_chrome_profile()
+				raise
+			assert self._serverPort is not None and self._debugPort is not None
+			return self._serverPort, self._debugPort
+
+	def get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
+		with self._lock:
+			pageUrl = self._page_url()
+			debugPort = self._debugPort
+			chromeProcess = self._chromeProcess
+		if debugPort is None:
 			raise _friendly_cdp_error(
-				_("Google TTS For NVDA could not start speech in the browser runtime."),
-				result.get("description") or "Browser speech evaluation failed.",
+				_("The browser runtime is not ready yet."),
+				"Browser DevTools port is not ready.",
 			)
-		value = result.get("value")
-		if isinstance(value, dict):
-			value.update(state)
-			return value
-		return state
+		for attempt in range(200):
+			_raise_if_cancelled(cancelEvent)
+			if chromeProcess is not None:
+				_hide_chrome_windows(chromeProcess.pid)
+			try:
+				targets = _read_json_endpoint(debugPort, "/json/list", timeout=0.5)
+			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+				time.sleep(STARTUP_POLL_INTERVAL)
+				continue
+			if isinstance(targets, list):
+				for target in targets:
+					if not isinstance(target, dict):
+						continue
+					if target.get("type") != "page":
+						continue
+					wsUrl = target.get("webSocketDebuggerUrl")
+					if not isinstance(wsUrl, str):
+						continue
+					if target.get("url") == pageUrl:
+						return wsUrl
+			time.sleep(STARTUP_POLL_INTERVAL)
+		raise _friendly_cdp_error(
+			_("Google TTS For NVDA could not find its speech page in the browser runtime."),
+			"Could not find browser speech page target.",
+		)
 
-	def stop_runtime(self) -> None:
-		try:
-			self.ensure_connection()
-			self._cdp_request(
-				"Runtime.evaluate",
-				{
-					"expression": STOP_EXPRESSION,
-					"awaitPromise": True,
-					"returnByValue": True,
-				},
-				timeout=5,
-			)
-		except Exception:
-			log.debug("Could not stop Google TTS browser runtime.", exc_info=True)
-
-	def cancel_current(self) -> None:
-		if self._runtimeBusy:
-			self._send_stop()
+	def start_and_get_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
+		self.start_browser(cancelEvent)
+		return self.get_page_websocket_url(cancelEvent)
 
 	def terminate(self) -> None:
 		with self._lock:
-			self._close_websocket()
 			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
 				with suppress(Exception):
 					self._chromeProcess.terminate()
@@ -712,93 +655,6 @@ class ChromeTtsBridge:
 			self._serverThread = None
 			self._serverPort = None
 			self._release_chrome_profile()
-
-	def _start_server(self) -> None:
-		if self._server is not None:
-			return
-		runtimeDir = voice_store.data_root() / "runtime"
-		runtimeDir.mkdir(parents=True, exist_ok=True)
-		(runtimeDir / "voices.json").write_text(self.catalog.to_runtime_json(), encoding="utf-8")
-		self._server = _ThreadingTcpServer(("127.0.0.1", 0), _BridgeRequestHandler)
-		self._serverPort = int(self._server.server_address[1])
-		self._serverThread = threading.Thread(
-			name="googleTtsForNvda.http",
-			target=self._server.serve_forever,
-			daemon=True,
-		)
-		self._serverThread.start()
-
-	def _start_chrome(self, cancelEvent: threading.Event | None = None) -> None:
-		if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-			if self._debugPort is not None:
-				return
-			with suppress(Exception):
-				self._chromeProcess.terminate()
-				self._chromeProcess.wait(timeout=2)
-			with suppress(Exception):
-				self._chromeProcess.kill()
-			self._chromeProcess = None
-			self._debugPort = None
-		_raise_if_cancelled(cancelEvent)
-		chromePath = self.find_chrome()
-		if not chromePath:
-			raise _friendly_cdp_error(
-				_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
-				"No supported browser runtime executable was found.",
-			)
-		profileDir = self._get_chrome_profile_dir(chromePath)
-		devToolsFile = profileDir / "DevToolsActivePort"
-		try:
-			devToolsFile.unlink()
-		except FileNotFoundError:
-			pass
-		pageUrl = self._page_url()
-		args = [
-			chromePath,
-			"--headless=new",
-			"--remote-debugging-port=0",
-			"--remote-allow-origins=*",
-			f"--user-data-dir={profileDir}",
-			"--no-first-run",
-			"--no-default-browser-check",
-			"--disable-background-networking",
-			"--disable-breakpad",
-			"--disable-crash-reporter",
-			"--disable-gpu",
-			"--noerrdialogs",
-			"--autoplay-policy=no-user-gesture-required",
-			"--window-position=-32000,-32000",
-			"--window-size=1,1",
-			"--disable-background-timer-throttling",
-			"--disable-backgrounding-occluded-windows",
-			"--disable-renderer-backgrounding",
-			"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
-			"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
-			"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
-			"--enable-wasm-simd",
-			pageUrl,
-		]
-		self._chromeProcess = subprocess.Popen(
-			args,
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-			**_hidden_chrome_startup_kwargs(),
-		)
-		_hide_chrome_windows(self._chromeProcess.pid)
-		_elevate_chrome_priority(self._chromeProcess.pid)
-		try:
-			self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
-			_hide_chrome_windows(self._chromeProcess.pid)
-		except Exception:
-			with suppress(Exception):
-				self._chromeProcess.terminate()
-				self._chromeProcess.wait(timeout=2)
-			with suppress(Exception):
-				self._chromeProcess.kill()
-			self._chromeProcess = None
-			self._debugPort = None
-			self._remove_chrome_profile()
-			raise
 
 	def _get_chrome_profile_dir(self, browserPath: str) -> Path:
 		if self._profileDir is not None:
@@ -925,68 +781,93 @@ class ChromeTtsBridge:
 			)
 		return f"http://127.0.0.1:{self._serverPort}/"
 
-	def _get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
-		pageUrl = self._page_url()
-		if self._debugPort is None:
-			raise _friendly_cdp_error(
-				_("The browser runtime is not ready yet."),
-				"Browser DevTools port is not ready.",
-			)
-		for attempt in range(200):
-			_raise_if_cancelled(cancelEvent)
-			if self._chromeProcess is not None:
-				_hide_chrome_windows(self._chromeProcess.pid)
-			try:
-				targets = _read_json_endpoint(self._debugPort, "/json/list", timeout=0.5)
-			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
-				time.sleep(STARTUP_POLL_INTERVAL)
-				continue
-			if isinstance(targets, list):
-				for target in targets:
-					if not isinstance(target, dict):
-						continue
-					if target.get("type") != "page":
-						continue
-					wsUrl = target.get("webSocketDebuggerUrl")
-					if not isinstance(wsUrl, str):
-						continue
-					if target.get("url") == pageUrl:
-						return wsUrl
-			time.sleep(STARTUP_POLL_INTERVAL)
-		raise _friendly_cdp_error(
-			_("Google TTS For NVDA could not find its speech page in the browser runtime."),
-			"Could not find browser speech page target.",
-		)
 
-	def _next_msg_id(self) -> int:
+class CdpClient:
+	"""Core WebSocket IPC transport and message ID correlation layer for browser CDP interaction."""
+
+	def __init__(self) -> None:
+		self._ws: websocket.WebSocket | None = None
+		self._dispatcher: CdpDispatcher | None = None
+		self._msgId = 0
+		self._msgIdLock = threading.Lock()
+		self._lock = threading.RLock()
+
+	@property
+	def ws(self) -> websocket.WebSocket | None:
+		return self._ws
+
+	@property
+	def dispatcher(self) -> CdpDispatcher | None:
+		return self._dispatcher
+
+	def connect(self, wsUrl: str) -> None:
+		with self._lock:
+			self.close()
+			self._ws = websocket.create_connection(wsUrl, timeout=15)
+			self._ws.settimeout(0.05)
+			self._dispatcher = CdpDispatcher(self._ws)
+			self._dispatcher.start()
+
+	def close(self) -> None:
+		with self._lock:
+			if self._dispatcher is not None:
+				self._dispatcher.stop()
+				self._dispatcher = None
+			if self._ws is not None:
+				with suppress(Exception):
+					self._ws.close()
+				self._ws = None
+
+	def is_connected(self) -> bool:
+		with self._lock:
+			return self._ws is not None and self._ws.connected and self._dispatcher is not None
+
+	def next_msg_id(self) -> int:
 		with self._msgIdLock:
 			self._msgId += 1
 			return self._msgId
 
-	def _cdp_request(
+	def send_command_async(self, method: str, params: dict[str, Any] | None = None) -> None:
+		with self._lock:
+			dispatcher = self._dispatcher
+			ws = self._ws
+		if ws is None or not ws.connected or dispatcher is None:
+			return
+		msgId = self.next_msg_id()
+		command = {"id": msgId, "method": method, "params": params or {}}
+		try:
+			dispatcher.send(command)
+		except Exception:
+			log.debug("Could not asynchronously send CDP command %s", method, exc_info=True)
+
+	def request(
 		self,
 		method: str,
 		params: dict[str, Any] | None = None,
 		timeout: float = 30,
 		eventHandler: Callable[[dict[str, Any]], None] | None = None,
 		cancelEvent: threading.Event | None = None,
+		onCancelCallback: Callable[[], None] | None = None,
 	) -> dict[str, Any]:
-		dispatcher = self._dispatcher
-		if self._ws is None or dispatcher is None:
+		with self._lock:
+			dispatcher = self._dispatcher
+			ws = self._ws
+		if ws is None or dispatcher is None or not ws.connected:
 			raise _friendly_cdp_error(
 				_("Google TTS For NVDA is not connected to the browser runtime."),
 				"Browser DevTools websocket is not connected.",
 			)
-		msgId = self._next_msg_id()
+		msgId = self.next_msg_id()
 		command = {"id": msgId, "method": method, "params": params or {}}
-		self._runtimeBusy = cancelEvent is not None
 		event = dispatcher.register_request(msgId, eventHandler=eventHandler)
 		try:
 			dispatcher.send(command)
 			deadline = time.monotonic() + timeout
 			while time.monotonic() < deadline:
 				if cancelEvent is not None and cancelEvent.is_set():
-					self._send_stop()
+					if onCancelCallback is not None:
+						with suppress(Exception):
+							onCancelCallback()
 					raise CdpCancelled()
 				if event.wait(timeout=0.01):
 					break
@@ -997,7 +878,6 @@ class ChromeTtsBridge:
 				)
 		finally:
 			response = dispatcher.unregister_request(msgId)
-			self._runtimeBusy = False
 
 		if response is None:
 			raise _friendly_cdp_error(
@@ -1013,35 +893,35 @@ class ChromeTtsBridge:
 		if isinstance(exceptionDetails, dict):
 			raise _friendly_cdp_error(
 				_("The browser runtime reported an error while preparing speech."),
-				self._format_exception(exceptionDetails),
+				self.format_exception(exceptionDetails),
 			)
 		return response
 
-	def _send_stop(self) -> None:
-		ws = self._ws
-		dispatcher = self._dispatcher
-		if ws is None or not ws.connected or dispatcher is None:
-			return
-		with self._stopLock:
-			now = time.monotonic()
-			if now - self._lastStopSentAt < 0.02:
-				return
-			self._lastStopSentAt = now
-			try:
-				command = {
-					"id": self._next_msg_id(),
-					"method": "Runtime.evaluate",
-					"params": {
-						"expression": STOP_EXPRESSION,
-						"awaitPromise": False,
-						"returnByValue": True,
-					},
-				}
-				dispatcher.send(command)
-			except Exception:
-				log.debug("Could not send fast browser speech stop command.", exc_info=True)
+	def format_exception(self, exceptionDetails: dict[str, Any]) -> str:
+		exception = exceptionDetails.get("exception")
+		if isinstance(exception, dict) and exception.get("description"):
+			return str(exception["description"])
+		if exceptionDetails.get("text"):
+			return str(exceptionDetails["text"])
+		return "Browser DevTools runtime exception."
 
-	def _wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
+
+class WasmTtsEngineBridge:
+	"""Routes high-level domain speech synthesis commands to the Google WASM TTS engine via CDP."""
+
+	def __init__(self, cdp_client: CdpClient, catalog: VoiceCatalog) -> None:
+		self._cdp = cdp_client
+		self.catalog = catalog
+		self._lastStopSentAt = 0.0
+		self._stopLock = threading.Lock()
+		self._runtimeBusy = False
+
+	def enable_cdp_domains(self) -> None:
+		self._cdp.request("Runtime.enable", timeout=15)
+		self._cdp.request("Page.enable", timeout=15)
+		self._cdp.request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
+
+	def wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
 		expression = """
 		typeof window.googleTtsForNvdaSpeak === "function"
 		&& typeof window.googleTtsForNvdaPreload === "function"
@@ -1051,7 +931,7 @@ class ChromeTtsBridge:
 		"""
 		for attempt in range(400):
 			_raise_if_cancelled(cancelEvent)
-			response = self._cdp_request(
+			response = self._cdp.request(
 				"Runtime.evaluate",
 				{"expression": expression, "returnByValue": True},
 				timeout=5,
@@ -1065,22 +945,314 @@ class ChromeTtsBridge:
 			"Browser speech harness did not finish loading.",
 		)
 
-	def _close_websocket(self) -> None:
-		if self._dispatcher is not None:
-			self._dispatcher.stop()
-			self._dispatcher = None
-		if self._ws is None:
-			return
+	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
+		package = self.catalog.package_for_voice(str(options["voiceId"]))
+		if not is_package_supported_by_engine(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not supported by the bundled Google TTS engine."),
+				f"Unsupported voice package for {package.id}.",
+			)
+		if not voice_store.is_package_installed(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
+				f"Missing voice package: {package.id}.",
+			)
+		_raise_if_cancelled(cancelEvent)
+		payload = {
+			"sessionId": f"preload-{time.monotonic_ns()}",
+			"voiceName": options["voiceName"],
+			"lang": options["lang"],
+			"text": str(options.get("warmupText") or "a"),
+		}
+		response = self._cdp.request(
+			"Runtime.evaluate",
+			{
+				"expression": f"window.googleTtsForNvdaPreload({json.dumps(payload, ensure_ascii=False)})",
+				"awaitPromise": True,
+				"returnByValue": True,
+				"userGesture": True,
+				"timeout": 60000,
+			},
+			timeout=70,
+			cancelEvent=cancelEvent,
+			onCancelCallback=self.send_fast_stop,
+		)
+		value = response.get("result", {}).get("result", {}).get("value")
+		return value if isinstance(value, dict) else {"success": True}
+
+	def speak(
+		self,
+		text: str,
+		options: dict[str, Any],
+		onAudio: AudioCallback,
+		cancelEvent: threading.Event | None = None,
+		onMark: MarkCallback | None = None,
+		segments: list[str] | None = None,
+	) -> dict[str, Any]:
+		if not text.strip():
+			return {"success": True, "empty": True}
+		package = self.catalog.package_for_voice(str(options["voiceId"]))
+		if not is_package_supported_by_engine(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not supported by the bundled Google TTS engine."),
+				f"Unsupported voice package for {package.id}.",
+			)
+		if not voice_store.is_package_installed(package):
+			raise _friendly_cdp_error(
+				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
+				f"Missing voice package: {package.id}.",
+			)
+		_raise_if_cancelled(cancelEvent)
+		sessionId = f"{time.monotonic_ns()}"
+		payload = {
+			"sessionId": sessionId,
+			"text": text,
+			"voiceName": options["voiceName"],
+			"lang": options["lang"],
+			"rate": options["rate"],
+			"artificialRate": options.get("artificialRate", 1),
+			"pitch": options["pitch"],
+			"volume": options["volume"],
+			"outputGain": options.get("outputGain", options["volume"]),
+		}
+		if segments:
+			payload["segments"] = segments
+		state: dict[str, Any] = {"audioChunks": 0, "done": False}
+		startedAt = time.perf_counter()
+		firstAudioAt: float | None = None
+
+		def handle_event(message: dict[str, Any]) -> None:
+			nonlocal firstAudioAt
+			if message.get("method") != "Runtime.bindingCalled":
+				return
+			params = message.get("params") or {}
+			if params.get("name") != BINDING_NAME:
+				return
+			rawPayload = params.get("payload")
+			if not isinstance(rawPayload, str):
+				return
+			event = json.loads(rawPayload)
+			if event.get("sessionId") != sessionId:
+				return
+			eventType = event.get("type")
+			if eventType == "started":
+				log.debug(
+					"Google TTS session %s started in Chromium after %.1f ms.",
+					sessionId,
+					(time.perf_counter() - startedAt) * 1000,
+				)
+			elif eventType == "audio":
+				if cancelEvent is not None and cancelEvent.is_set():
+					raise CdpCancelled()
+				audio = base64.b64decode(str(event.get("data") or ""))
+				if audio:
+					if cancelEvent is not None and cancelEvent.is_set():
+						raise CdpCancelled()
+					if firstAudioAt is None:
+						firstAudioAt = time.perf_counter()
+						log.debug(
+							"Google TTS session %s first audio after %.1f ms.",
+							sessionId,
+							(firstAudioAt - startedAt) * 1000,
+						)
+					state["audioChunks"] += 1
+					onAudio(audio)
+			elif eventType == "mark":
+				if onMark is not None:
+					try:
+						onMark(max(0, int(event.get("charIndex") or 0)))
+					except (TypeError, ValueError):
+						pass
+			elif eventType == "done":
+				state["done"] = True
+			elif eventType == "error":
+				detail = str(event.get("message") or "Browser speech synthesis failed.")
+				raise _friendly_cdp_error(
+					_("Google TTS For NVDA could not speak this text."),
+					detail,
+				)
+
+		expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
+		self._runtimeBusy = cancelEvent is not None
 		try:
-			self._ws.close()
+			response = self._cdp.request(
+				"Runtime.evaluate",
+				{
+					"expression": expression,
+					"awaitPromise": True,
+					"returnByValue": True,
+					"userGesture": True,
+					"timeout": 120000,
+				},
+				timeout=130,
+				eventHandler=handle_event,
+				cancelEvent=cancelEvent,
+				onCancelCallback=self.send_fast_stop,
+			)
+		except CdpCancelled:
+			raise
+		finally:
+			self._runtimeBusy = False
+		result = response.get("result", {}).get("result", {})
+		if result.get("subtype") == "error":
+			raise _friendly_cdp_error(
+				_("Google TTS For NVDA could not start speech in the browser runtime."),
+				result.get("description") or "Browser speech evaluation failed.",
+			)
+		value = result.get("value")
+		if isinstance(value, dict):
+			value.update(state)
+			return value
+		return state
+
+	def send_fast_stop(self) -> None:
+		if not self._cdp.is_connected():
+			return
+		with self._stopLock:
+			now = time.monotonic()
+			if now - self._lastStopSentAt < 0.02:
+				return
+			self._lastStopSentAt = now
+			self._cdp.send_command_async(
+				"Runtime.evaluate",
+				{
+					"expression": STOP_EXPRESSION,
+					"awaitPromise": False,
+					"returnByValue": True,
+				},
+			)
+
+	def stop_runtime(self) -> None:
+		try:
+			self._cdp.request(
+				"Runtime.evaluate",
+				{
+					"expression": STOP_EXPRESSION,
+					"awaitPromise": True,
+					"returnByValue": True,
+				},
+				timeout=5,
+			)
 		except Exception:
-			pass
-		self._ws = None
+			log.debug("Could not stop Google TTS browser runtime.", exc_info=True)
+
+	def cancel_current(self) -> None:
+		if self._runtimeBusy:
+			self.send_fast_stop()
+
+
+class ChromeTtsBridge:
+	"""Public facade orchestrating BrowserProcessManager, CdpClient, and WasmTtsEngineBridge."""
+
+	def __init__(self, catalog: VoiceCatalog | None = None) -> None:
+		self.catalog = catalog or VoiceCatalog.load()
+		self._process_manager = BrowserProcessManager(self.catalog)
+		self._cdp_client = CdpClient()
+		self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
+		self._lock = threading.RLock()
+
+	@classmethod
+	def find_chrome(cls) -> str | None:
+		return BrowserProcessManager.find_chrome()
+
+	@property
+	def _ws(self) -> websocket.WebSocket | None:
+		return self._cdp_client.ws
+
+	@property
+	def _dispatcher(self) -> CdpDispatcher | None:
+		return self._cdp_client.dispatcher
+
+	@property
+	def _chromeProcess(self) -> subprocess.Popen[bytes] | None:
+		return self._process_manager.chrome_process
+
+	@property
+	def _debugPort(self) -> int | None:
+		return self._process_manager.debug_port
+
+	@property
+	def _serverPort(self) -> int | None:
+		return self._process_manager.server_port
+
+	def ensure_connection(self) -> None:
+		with self._lock:
+			if self._cdp_client.is_connected():
+				return
+			try:
+				wsUrl = self._process_manager.start_and_get_websocket_url()
+				self._cdp_client.connect(wsUrl)
+				self._engine.enable_cdp_domains()
+				self._engine.wait_until_ready()
+			except Exception:
+				self._cdp_client.close()
+				self._process_manager.terminate()
+				raise
+
+	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
+		self.ensure_connection()
+		return self._engine.preload_voice(options, cancelEvent=cancelEvent)
+
+	def speak(
+		self,
+		text: str,
+		options: dict[str, Any],
+		onAudio: AudioCallback,
+		cancelEvent: threading.Event | None = None,
+		onMark: MarkCallback | None = None,
+		segments: list[str] | None = None,
+	) -> dict[str, Any]:
+		self.ensure_connection()
+		return self._engine.speak(
+			text,
+			options,
+			onAudio,
+			cancelEvent=cancelEvent,
+			onMark=onMark,
+			segments=segments,
+		)
+
+	def stop_runtime(self) -> None:
+		try:
+			self.ensure_connection()
+			self._engine.stop_runtime()
+		except Exception:
+			log.debug("Could not stop Google TTS browser runtime.", exc_info=True)
+
+	def cancel_current(self) -> None:
+		self._engine.cancel_current()
+
+	def terminate(self) -> None:
+		with self._lock:
+			self._cdp_client.close()
+			self._process_manager.terminate()
+
+	def _cdp_request(
+		self,
+		method: str,
+		params: dict[str, Any] | None = None,
+		timeout: float = 30,
+		eventHandler: Callable[[dict[str, Any]], None] | None = None,
+		cancelEvent: threading.Event | None = None,
+	) -> dict[str, Any]:
+		return self._cdp_client.request(
+			method,
+			params,
+			timeout=timeout,
+			eventHandler=eventHandler,
+			cancelEvent=cancelEvent,
+			onCancelCallback=self._engine.send_fast_stop,
+		)
+
+	def _send_stop(self) -> None:
+		self._engine.send_fast_stop()
+
+	def _wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
+		self._engine.wait_until_ready(cancelEvent=cancelEvent)
+
+	def _close_websocket(self) -> None:
+		self._cdp_client.close()
 
 	def _format_exception(self, exceptionDetails: dict[str, Any]) -> str:
-		exception = exceptionDetails.get("exception")
-		if isinstance(exception, dict) and exception.get("description"):
-			return str(exception["description"])
-		if exceptionDetails.get("text"):
-			return str(exceptionDetails["text"])
-		return "Browser DevTools runtime exception."
+		return self._cdp_client.format_exception(exceptionDetails)
+
