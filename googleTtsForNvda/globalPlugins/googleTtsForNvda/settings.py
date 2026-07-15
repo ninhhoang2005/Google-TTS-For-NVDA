@@ -190,12 +190,18 @@ def _apply_runtime_after_synth_switch(runtime: str, attempts: int) -> None:
 class GoogleTtsSettingsPanel(SettingsPanel):
 	title = _("Google TTS For NVDA")
 
+	def _refresh_runtime_snapshot(self, runtime: str | None = None) -> None:
+		self._runtimeSnapshot = browserBridge.browser_runtime_snapshot(runtime)
+		self._availability = self._runtimeSnapshot["availability"]
+		self._browserExecutableAvailability = self._runtimeSnapshot["executableAvailability"]
+		self._edgeWebView2Available = self._runtimeSnapshot["edgeWebView2Available"]
+		self._effectiveRuntime = self._runtimeSnapshot["effectiveRuntime"]
+
 	def makeSettings(self, settingsSizer: wx.Sizer) -> None:
 		self._settingsSizer = settingsSizer
-		self._availability = browserBridge.browser_availability()
 		self._runtimeValues = list(browserBridge.BROWSER_RUNTIMES)
-		self._savedRuntime = browserBridge.configured_browser_runtime()
-		self._effectiveRuntime = browserBridge.effective_browser_runtime(self._savedRuntime)
+		self._refresh_runtime_snapshot()
+		self._savedRuntime = self._runtimeSnapshot["selectedRuntime"]
 		self._speakersByLanguage = self._installed_speakers_by_language()
 		self._languageValues = list(self._speakersByLanguage)
 		self._languageCounts = {
@@ -221,11 +227,6 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._preferredLanguageValues = self._enabled_auto_language_candidates()
 
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
-		self._browserExecutableAvailability = {
-			runtime: browserBridge.browser_executable_available(runtime)
-			for runtime in browserBridge.BROWSER_RUNTIMES
-		}
-		self._edgeWebView2Available = browserBridge.edge_webview2_available()
 		choices = [self._format_runtime_choice(runtime) for runtime in self._runtimeValues]
 		self.runtimeChoice = helper.addLabeledControl(
 			_("Chromium browser &runtime:"),
@@ -370,6 +371,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			selectedRuntime = self._runtimeValues[selection]
 		self._store_selected_auto_language_profile(self._selectedAutoLanguageProfileIndex)
 		self._save_auto_language_settings()
+		self._refresh_runtime_snapshot(self._savedRuntime)
 		if selectedRuntime == self._savedRuntime:
 			return
 		if not self._availability.get(selectedRuntime, False):
@@ -394,7 +396,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			self._select_saved_runtime()
 			return
 
-		effectiveRuntime = browserBridge.effective_browser_runtime(self._savedRuntime)
+		effectiveRuntime = self._effectiveRuntime
 		if _is_google_synth_current() and selectedRuntime != effectiveRuntime:
 			answer = gui.messageBox(
 				_(
@@ -414,13 +416,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 
 		_save_browser_runtime(selectedRuntime)
 		self._savedRuntime = selectedRuntime
-		self._availability = browserBridge.browser_availability()
-		self._browserExecutableAvailability = {
-			runtime: browserBridge.browser_executable_available(runtime)
-			for runtime in browserBridge.BROWSER_RUNTIMES
-		}
-		self._edgeWebView2Available = browserBridge.edge_webview2_available()
-		self._effectiveRuntime = browserBridge.effective_browser_runtime(self._savedRuntime)
+		self._refresh_runtime_snapshot(self._savedRuntime)
 		self.effectiveRuntimeText.SetValue(self._effective_runtime_message())
 
 	def _format_runtime_choice(self, runtime: str) -> str:

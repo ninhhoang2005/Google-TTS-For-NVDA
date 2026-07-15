@@ -62,6 +62,7 @@ CHROME_PROFILE_DIR_NAME = "chromeProfiles"
 EDGE_PROFILE_DIR_NAME = "edgeProfiles"
 BRAVE_PROFILE_DIR_NAME = "braveProfiles"
 PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
+PERSISTENT_PROFILE_MAX_BYTES = 500 * 1024 * 1024
 CONFIG_SECTION = "googleTtsForNvda"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
 CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
@@ -470,6 +471,37 @@ def browser_availability() -> dict[str, bool]:
 	return {runtime: browser_runtime_available(runtime) for runtime in BROWSER_RUNTIMES}
 
 
+def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
+	selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
+	paths = {candidateRuntime: browser_path_for_runtime(candidateRuntime) for candidateRuntime in BROWSER_RUNTIMES}
+	executableAvailability = {
+		candidateRuntime: path is not None
+		for candidateRuntime, path in paths.items()
+	}
+	edgeWebView2Available = edge_webview2_available()
+	availability = {
+		candidateRuntime: bool(path)
+		and (candidateRuntime != BROWSER_RUNTIME_EDGE or edgeWebView2Available)
+		for candidateRuntime, path in paths.items()
+	}
+	effectivePath = None
+	for candidateRuntime in _runtime_fallback_order(selectedRuntime):
+		if not availability.get(candidateRuntime, False):
+			continue
+		effectivePath = paths.get(candidateRuntime)
+		if effectivePath:
+			break
+	return {
+		"selectedRuntime": selectedRuntime,
+		"paths": paths,
+		"executableAvailability": executableAvailability,
+		"edgeWebView2Available": edgeWebView2Available,
+		"availability": availability,
+		"effectivePath": effectivePath,
+		"effectiveRuntime": browser_runtime_for_path(effectivePath) if effectivePath else None,
+	}
+
+
 def browser_runtime_for_path(browserPath: str) -> str:
 	exeName = Path(browserPath).name.lower()
 	if exeName in ("msedge.exe", "msedge"):
@@ -840,10 +872,14 @@ class BrowserProcessManager:
 		persistent = root / PERSISTENT_PROFILE_DIR_NAME
 		if persistent.is_dir():
 			try:
-				totalSize = sum(
-					f.stat().st_size for f in persistent.rglob("*") if f.is_file()
-				)
-				if totalSize > 500 * 1024 * 1024:  # 500 MB
+				totalSize = 0
+				for candidate in persistent.rglob("*"):
+					if not candidate.is_file():
+						continue
+					totalSize += candidate.stat().st_size
+					if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
+						break
+				if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
 					log.debug(
 						"Persistent browser profile exceeds 500 MB (%d bytes), resetting.",
 						totalSize,

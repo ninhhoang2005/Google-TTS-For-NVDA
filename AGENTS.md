@@ -157,6 +157,12 @@ This add-on depends on a supported Chromium browser runtime, such as Google Chro
 - If opening a WebView2/download URL fails, the fallback dialog must show the URL in a focusable read-only field with a real label association, bind the same full-value focus announcement used by Google TTS status fields, and include a Copy link button.
 - Microsoft Edge WebView2 Runtime is required only when Microsoft Edge is the selected/effective Chromium browser runtime. Google Chrome and Brave must not depend on WebView2; Chrome and Brave availability should be checked only through their browser executable/path. Status messages, fallback logic, prompts, and documentation must not imply that Chrome or Brave needs Edge WebView2.
 - Keep fallback/error wording clear: if no supported Chromium browser runtime is available, the synth cannot provide speech through the Google WASM TTS engine.
+- Browser-runtime code map:
+  - Runtime constants and labels live in `bridge.py`: `BROWSER_RUNTIME_CHROME`, `BROWSER_RUNTIME_EDGE`, `BROWSER_RUNTIME_BRAVE`, `BROWSER_RUNTIMES`, `DEFAULT_BROWSER_RUNTIME`, and `BROWSER_RUNTIME_LABELS`.
+  - Detection and fallback flow lives in `bridge.py`: `_runtime_fallback_order()`, `_browser_candidates()`, `browser_path_for_runtime()`, `browser_executable_available()`, `edge_webview2_available()`, `browser_runtime_available()`, `browser_availability()`, `browser_runtime_snapshot()`, `find_browser()`, and `effective_browser_runtime()`.
+  - Keep the fallback order Chrome, Edge, then Brave unless changing the product decision. If the saved runtime is Brave and Brave is unavailable, fallback must still find Chrome or Edge when they are usable.
+  - `browser_runtime_snapshot()` is for UI/status code that needs a consistent view of executable availability, Edge WebView2 availability, and the effective fallback runtime. It must not make Chrome or Brave depend on WebView2.
+  - Browser profile separation lives in `BrowserProcessManager._browser_profile_dir_name()` and the profile directory constants `CHROME_PROFILE_DIR_NAME`, `EDGE_PROFILE_DIR_NAME`, and `BRAVE_PROFILE_DIR_NAME`. Brave cache/WASM profile data belongs under `braveProfiles`, not the Chrome or Edge profile roots.
 
 ### Supported settings ring parameters
 
@@ -188,6 +194,10 @@ These were removed and must stay removed unless the user explicitly requests a n
 - Status/help lines in Speech Settings, the Google TTS settings category, and similar NVDA dialogs must be reachable by Tab and read by NVDA. Use focusable read-only controls for these status lines instead of plain `wx.StaticText`.
 - Focusable status/help controls must have a real label association, not only `SetName()`, so NVDA announces the status/help name before the read-only edit role. If the status/help text can wrap or span multiple lines, make focus announce the complete current message while still allowing arrow-key review inside the read-only edit.
 - Apply this rule to Chromium browser runtime status, automatic language profile status, Speech Settings notices, current-browser notices, and future status/help fields with similar behavior.
+- Accessibility helper map:
+  - Use `settings.py:bind_read_only_text_focus_announcement()` for focusable read-only status/help text that may be long or wrapped, including fallback URL fields.
+  - Speech Settings read-only notices are created through `globalPlugins/googleTtsForNvda/__init__.py:_make_read_only_text_setting_control()` and patched by `_patch_read_only_text_setting()`. Keep `_hide_google_tts_auto_profile_speech_controls()` hiding normal speech controls only while automatic language profiles replace them.
+  - Manual URL fallback dialogs should follow `_show_manual_web_url_dialog()`: real label association, read-only `wx.TextCtrl`, full-value focus announcement, and a Copy link button.
 
 ### Automatic language profiles
 
@@ -221,6 +231,13 @@ Automatic language profiles deliberately have their own profile system and must 
 - The main checkbox label should describe the broader behavior as automatic language profiles, not only switching between voices, because one enabled profile is valid and applies to every sentence.
 - When automatic language profiles are enabled, `SynthDriver.supportedSettings` should hide normal `VoiceSetting`, `RateSetting`, `RateBoostSetting`, `PitchSetting`, and `VolumeSetting`, and instead expose a read-only notice that directs the user to the Google TTS For NVDA settings category. Refresh the settings ring after saving the automatic language profile setting.
 - Vietnamese UI/docs must translate "Google TTS for NVDA" as "Google TTS Cho NVDA" when it is user-facing text.
+- Automatic language profile code map:
+  - Synth-side selection lives in `synthDrivers/googleTtsForNvda/__init__.py`: `_auto_detect_profile_for_text()`, `_auto_language_profile()`, `_auto_language_profile_for_language()`, `_auto_language_candidates()`, `_auto_language_preferred()`, `_auto_language_candidate_for_language()`, `_detect_auto_language()`, `_language_token_signal()`, `_language_script_signal()`, `_voice_for_language()`, `_voice_matches_language()`, and `_speech_options()`.
+  - NVDA speech pipeline integration lives in `globalPlugins/googleTtsForNvda/__init__.py`: `_filter_auto_language_speech_sequence()`, `_register_auto_language_speech_filter()`, `_unregister_auto_language_speech_filter()`, `_google_lang_change_command()`, `_nvda_locale_for_language()`, `_auto_language_for_process_text()`, `_patch_auto_language_voice_dictionary()`, and `_unpatch_auto_language_voice_dictionary()`.
+  - Character, spelling, and symbol-related profile behavior is handled by `_auto_profile_character_settings_for_language()`, `_auto_profile_character_context_for_text()`, `_single_auto_profile_character_settings()`, the patched `speech.getSpellingSpeech`, and the patched `shortcutKeys.shouldUseSpellingFunctionality`. Preserve temporary config overlays and always restore NVDA speech config values.
+  - Settings UI storage and validation live in `settings.py`: `_configured_auto_language_profiles()`, `_ensure_auto_language_profiles()`, `_valid_profile_voice()`, `_load_selected_auto_language_profile()`, `_store_selected_auto_language_profile()`, `_enabled_auto_language_candidates()`, `_auto_language_status_message()`, `_refresh_auto_language_controls()`, `_save_auto_language_settings()`, and `_refresh_synth_settings_ring()`.
+  - Language detection wrapper code lives in `language_detector.py`: `_DLL_NAMES`, `DetectionResult`, `_Cld2Detector.detect()`, `_Cld2Detector._load_library()`, `detect_language()`, `_candidate_for_language()`, and `_normalize_language()`. Keep x86/x64 DLL selection compatible with the running NVDA/Python architecture.
+  - `detect_language()` must return only one of the enabled Google profile candidate languages, not a raw CLD2 language code. `_MIN_RELIABLE_PERCENT` and `DetectionResult.isReliable` gate CLD2 output before local script/word heuristics or preferred-language fallback are used.
 
 ### Volatile RAM speech cache
 
@@ -238,6 +255,10 @@ Automatic language profiles deliberately have their own profile system and must 
 - Keep `cachePropertiesByDefault = False`.
 - Preserve compatibility with NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds. When hooking NVDA APIs whose signatures changed across these versions, use compatibility wrappers like the `setSynth` hook rather than assuming only one signature.
 - When a task provides or names a local NVDA source-code directory, inspect the relevant NVDA versions available there and prefer an implementation compatible across those versions, especially for scripts, input gestures, settings dialogs, speech processing hooks, and other NVDA internals used by this add-on.
+- NVDA compatibility code map:
+  - Synth switching compatibility lives in `globalPlugins/googleTtsForNvda/__init__.py`: `_normalize_set_synth_args()`, `_call_set_synth_compat()`, `_set_synth_with_google_tts_voice_prompt()`, `_patch_synth_selection()`, and `_unpatch_synth_selection()`. These wrappers preserve compatibility with `setSynth` signatures across NVDA versions; do not replace them with a single assumed signature.
+  - Voice dictionary/settings dialog hooks live in `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`. Always unpatch only if the current callable is the one installed by this add-on.
+  - Input gesture scripts live in `GlobalPlugin.script_openVoiceManager()` and `GlobalPlugin.script_openSettings()`. `script_openVoiceManager` has the default gesture `kb:NVDA+control+shift+g`; `script_openSettings` intentionally has no default gesture so user assignments are stored by NVDA in `gestures.ini`.
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
 - Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.
 - Do not import NVDA-only modules unguarded in modules that may be imported by tests. Existing try/except patterns for `logHandler`, `addonHandler`, and `globalVars` are intentional.
@@ -325,6 +346,8 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 - `data_root() -> Path`
 - `voice_dir() -> Path`
 - `is_package_installed(package) -> bool`; verifies existence, size, and SHA-256
+- `physically_installed_packages(catalog) -> list[VoicePackage]`; returns packages that pass on-disk installation verification
+- `usable_installed_packages(packages) -> list[VoicePackage]`; filters an already verified installed package list by bundled-engine support and dependency availability without re-verifying files
 - `installed_packages(catalog) -> list[VoicePackage]`
 - `download_package(package, progress?) -> Path`; only called from Voice Manager flows
 - `remove_package(package)`
@@ -413,6 +436,12 @@ When modifying `voiceManager.py` or any UI:
 - Custom checks can run individual categories such as `manifest`, `docs`, `ui`, `placeholders`, `sort`, or `obsolete`; `--checks all` runs every category.
 - Use `python build_i18n.py --language <language>` to build generated files only when the workflow relies on the script to generate `.mo` and localized `manifest.ini`.
 - `build.bat` must call `python build_i18n.py --all-languages` so release packaging builds every add-on locale non-interactively, then removes `__pycache__` created by syntax checks before packaging.
+- Translation tool code map:
+  - `build_i18n.py` reads source strings from Python `_()` calls and `manifest.ini` via `_translatable_source_messages()` and `_manifest_values()`, then writes `locale/nvda.pot` through `_write_pot()`.
+  - `.po` parsing and validation live in `_parse_po()`, `_check_catalog()`, `_check_language_files()`, `_check_language_sort_file()`, `_parse_checks()`, and `_print_run_summary()`. These checks cover NVDA language codes, localized manifest, localized readme, UI strings, placeholders, language sorting, and obsolete active source strings.
+  - Generated files are produced by `_compile_mo()` and `_write_translated_manifest()`. Do not hand-edit generated `.mo` files; update `nvda.po` and rebuild.
+  - Interactive menu behavior lives in `_prompt_languages()`, `_prompt_checks()`, `_interactive_options()`, and `main()`. Keep all-locale/default choices first so blind translators can choose the broad safe option quickly.
+  - NVDA locale discovery uses `DEFAULT_NVDA_LOCALE_DIRS`, `_supported_nvda_languages_from_dirs()`, and `--nvda-locale-dir`. Keep both `C:\Program Files\NVDA\locale` and `C:\Program Files (x86)\NVDA\locale` because supported NVDA versions can be x64 or older x86 installs.
 - The English add-on author names are `Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong`.
 - For Vietnamese localization, write the authors as `Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương`.
 - When an author metadata line includes email addresses for Nguyen Anh Duc/Nguyễn Anh Đức and Dao Duc Trung/Đào Đức Trung, it must also include Pham Hung Vuong/Phạm Hùng Vương with `hungvuong106206@gmail.com`.
@@ -437,6 +466,12 @@ The `.nvda-addon` file is a ZIP archive:
 ```powershell
 Compress-Archive -Path googleTtsForNvda\* -DestinationPath dist\googleTtsForNvda-X.Y.Z.nvda-addon -Force
 ```
+
+### Build script code map
+
+- `build.bat` is the release packaging entry point. It reads `version` from `googleTtsForNvda\manifest.ini`, cleans stale build artifacts and `__pycache__`, checks unresolved merge conflict markers, runs `python build_i18n.py --all-languages`, runs Python and JavaScript syntax checks, rejects `.zvoice` files in the source tree, packages `googleTtsForNvda\*` into `dist\googleTtsForNvda-<version>.nvda-addon`, and cleans `__pycache__` again before exit.
+- Keep the build steps ordered so generated translations are present before syntax/package checks, and so `__pycache__` created by `compileall` is removed before packaging.
+- If adding a new source file type that can contain merge conflict markers or translatable/release content, update the `build.bat` conflict-marker scan patterns and the packaging/check instructions together.
 
 ### Required checks by change type
 

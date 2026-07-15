@@ -185,15 +185,18 @@ def physically_installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
 	return [package for package in catalog.packages if is_package_installed(package)]
 
 
-def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
-	installed = physically_installed_packages(catalog)
-	installedIds = {package.id for package in installed}
+def usable_installed_packages(packages: list[VoicePackage]) -> list[VoicePackage]:
+	installedIds = {package.id for package in packages}
 	return [
 		package
-		for package in installed
+		for package in packages
 		if is_package_supported_by_engine(package)
 		and (not package.dependentVoiceId or package.dependentVoiceId in installedIds)
 	]
+
+
+def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
+	return usable_installed_packages(physically_installed_packages(catalog))
 
 
 def remove_package(package: VoicePackage) -> None:
@@ -225,13 +228,17 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 	with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
 		total = int(response.headers.get("Content-Length") or package.compressedSize or 0)
 		downloaded = 0
+		lastPercent = -1
 		for chunk in iter(lambda: response.read(1024 * 256), b""):
 			if not chunk:
 				break
 			output.write(chunk)
 			downloaded += len(chunk)
 			if progress and total:
-				progress(min(99, int(downloaded * 100 / total)), _("Downloading {package}.").format(package=package.id))
+				percent = min(99, int(downloaded * 100 / total))
+				if percent != lastPercent:
+					lastPercent = percent
+					progress(percent, _("Downloading {package}.").format(package=package.id))
 	if package.compressedSize and tmp.stat().st_size != package.compressedSize:
 		tmp.unlink(missing_ok=True)
 		raise RuntimeError(

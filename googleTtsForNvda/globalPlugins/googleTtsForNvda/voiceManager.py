@@ -494,7 +494,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 	def refresh_lists(self, announce: bool = False) -> None:
 		self._allInstalledPackages = voice_store.physically_installed_packages(self.catalog)
-		self._allUsableInstalledPackages = voice_store.installed_packages(self.catalog)
+		self._allUsableInstalledPackages = voice_store.usable_installed_packages(self._allInstalledPackages)
 		installedIds = {pkg.id for pkg in self._allInstalledPackages}
 		self._allDownloadPackages = [pkg for pkg in self.catalog.packages if pkg.id not in installedIds]
 		supportedDownloadCount = sum(1 for pkg in self._allDownloadPackages if is_package_supported_by_engine(pkg))
@@ -705,7 +705,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def _usable_packages_after_removal(self, packages: list[VoicePackage]) -> list[VoicePackage]:
 		removedIds = {pkg.id for pkg in packages}
 		remaining = [pkg for pkg in self._allInstalledPackages if pkg.id not in removedIds]
-		return voice_store.installed_packages(VoiceCatalog(remaining))
+		return voice_store.usable_installed_packages(remaining)
 
 	def _removes_all_usable_voices(self, packages: list[VoicePackage]) -> bool:
 		return bool(self._allUsableInstalledPackages) and not self._usable_packages_after_removal(packages)
@@ -926,6 +926,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			succeeded = 0
 			succeededIds: list[str] = []
 			failed: list[tuple[str, str]] = []
+			lastOverall: int | None = None
+			lastStatusMessage = ""
 			for i, package in enumerate(packages):
 				def _progress(
 					percent: int | None,
@@ -933,6 +935,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 					_idx: int = i,
 					_pkgId: str = package.id,
 				) -> None:
+					nonlocal lastOverall, lastStatusMessage
 					if percent is not None:
 						overall = int((_idx * 100 + percent) / totalCount)
 						statusMessage = _("Downloading {current}/{total}: {package}, overall {percent} percent complete").format(
@@ -948,6 +951,10 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 							total=totalCount,
 							package=_pkgId,
 						)
+					if overall == lastOverall and statusMessage == lastStatusMessage:
+						return
+					lastOverall = overall
+					lastStatusMessage = statusMessage
 					wx.CallAfter(
 						self.set_status,
 						statusMessage,
