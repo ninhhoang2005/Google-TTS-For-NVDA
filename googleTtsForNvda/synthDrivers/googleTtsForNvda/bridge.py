@@ -183,6 +183,22 @@ def _friendly_cdp_error(message: str, technicalDetail: str | None = None) -> Cdp
 	return CdpError(message, technicalDetail)
 
 
+_TRANSIENT_RUNTIME_EVALUATE_ERRORS = (
+	"Cannot find default execution context",
+	"Execution context was destroyed",
+	"Cannot find context with specified id",
+	"Inspected target navigated or closed",
+)
+
+
+def _is_transient_runtime_evaluate_error(error: CdpError) -> bool:
+	technicalDetail = str(getattr(error, "technicalDetail", "") or "")
+	return "CDP error for Runtime.evaluate:" in technicalDetail and any(
+		message in technicalDetail
+		for message in _TRANSIENT_RUNTIME_EVALUATE_ERRORS
+	)
+
+
 def _browser_profile_in_use_error() -> _BrowserProfileInUseError:
 	message = _(
 		"The browser profile used by Google TTS For NVDA is already in use. "
@@ -1162,12 +1178,18 @@ class WasmTtsEngineBridge:
 		"""
 		for attempt in range(400):
 			_raise_if_cancelled(cancelEvent)
-			response = self._cdp.request(
-				"Runtime.evaluate",
-				{"expression": expression, "returnByValue": True},
-				timeout=5,
-				cancelEvent=cancelEvent,
-			)
+			try:
+				response = self._cdp.request(
+					"Runtime.evaluate",
+					{"expression": expression, "returnByValue": True},
+					timeout=5,
+					cancelEvent=cancelEvent,
+				)
+			except CdpError as exc:
+				if _is_transient_runtime_evaluate_error(exc):
+					time.sleep(STARTUP_POLL_INTERVAL)
+					continue
+				raise
 			if response.get("result", {}).get("result", {}).get("value") is True:
 				return
 			time.sleep(STARTUP_POLL_INTERVAL)

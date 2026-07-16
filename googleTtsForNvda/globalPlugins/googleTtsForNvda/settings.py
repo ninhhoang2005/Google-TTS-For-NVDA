@@ -800,6 +800,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._settingsSizer.Layout()
 
 	def _save_auto_language_settings(self) -> None:
+		wasEnabled = self._configured_auto_language_detection()
 		enabled = self.autoLanguageCheck.GetValue() and bool(self._languageValues)
 		candidates = self._checked_auto_language_candidates()
 		preferredIndex = self.preferredLanguageChoice.GetSelection()
@@ -831,16 +832,22 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			section[browserBridge.CONFIG_AUTO_LANGUAGE_PREFERRED] = preferred
 			section[browserBridge.CONFIG_AUTO_LANGUAGE_CANDIDATES] = ",".join(candidates)
 			section[browserBridge.CONFIG_AUTO_LANGUAGE_PROFILES] = json.dumps(profiles, ensure_ascii=False, sort_keys=True)
-			self._refresh_synth_settings_ring()
+			self._refresh_synth_settings_ring(reloadSpeechSettings=wasEnabled and not enabled)
+			self._savedAutoLanguageDetection = enabled
 		except Exception:
 			log.debug("Could not save Google TTS automatic language profile settings.", exc_info=True)
 
-	def _refresh_synth_settings_ring(self) -> None:
+	def _refresh_synth_settings_ring(self, reloadSpeechSettings: bool = False) -> None:
 		try:
 			currentSynth = synthDriverHandler.getSynth()
 			settingsRing = getattr(globalVars, "settingsRing", None)
 			if getattr(currentSynth, "name", "") != SYNTH_NAME:
 				return
+			if reloadSpeechSettings:
+				# Turning automatic language profiles off makes the normal synth
+				# settings visible again; reload their saved values into the live
+				# synth before rebuilding the settings ring.
+				currentSynth.loadSettings(onlyChanged=True)
 			if settingsRing is not None:
 				settingsRing.updateSupportedSettings(currentSynth)
 			warmCurrentVoice = getattr(currentSynth, "_warm_current_voice_async", None)
