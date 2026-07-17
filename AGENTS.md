@@ -269,6 +269,12 @@ Automatic language profiles deliberately have their own profile system and must 
 - The short-phrase cache is volatile: it is not written to disk and clears when NVDA exits, NVDA restarts, or the PC reboots.
 - The current short-phrase cache threshold is 5000 characters.
 - Do not add persistent speech-audio caching without an explicit product decision, because cached speech can contain sensitive screen-reader text.
+- Cache integrity rule: only cache PCM for a complete, successful speech request. If speech is cancelled, interrupted by a newer utterance, aborted by warm-up/runtime shutdown, or the browser bridge does not report successful completion, discard collected PCM so partial audio such as a cut-off focus announcement cannot be replayed later as a full utterance.
+- Volatile speech cache code map:
+  - Cache read/write orchestration lives in `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._speak_text()`. It must collect PCM during live synthesis but call `_put_cached_audio()` only after `ChromeTtsBridge.speak()` returns a successful result with browser-side `done` and the request cancel event is still clear.
+  - Cache identity and storage live in `SynthDriver._short_cache_key()`, `_get_cached_audio()`, and `_put_cached_audio()`. Keep the key aligned with every option that can change rendered PCM, including hidden segments and post-synthesis audio options.
+  - The Python bridge completion contract lives in `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:WasmTtsEngineBridge.speak()`, where Runtime binding events update `audioChunks` and `done`, cancellation drops late audio, and the returned result is merged with that state.
+  - Browser completion signaling lives in `googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js:googleTtsForNvdaSpeak()`, `waitForSynthesisComplete()`, `finishSegmentAudio()`, `flushAudioProcessors()`, and `flushAudioQueue()`. Preserve the `done` event as the signal that all queued audio for the session has been flushed.
 
 ---
 

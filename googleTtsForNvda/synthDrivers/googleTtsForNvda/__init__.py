@@ -1439,7 +1439,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			if not cancelEvent.is_set():
 				self._feed_audio(pcm)
 
-		self._bridge.speak(
+		speechResult = self._bridge.speak(
 			text,
 			options,
 			on_audio,
@@ -1455,7 +1455,13 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					return
 				self._sync_player()
 				synthIndexReached.notify(synth=self, index=index)
-		if cacheKey is not None and len(audio) >= 64:
+		speechComplete = (
+			isinstance(speechResult, dict)
+			and speechResult.get("success") is True
+			and speechResult.get("done") is True
+			and not speechResult.get("cancelled")
+		)
+		if cacheKey is not None and speechComplete and not cancelEvent.is_set() and len(audio) >= 64:
 			self._put_cached_audio(cacheKey, audio)
 
 	def _feed_audio(self, pcm: bytes) -> None:
