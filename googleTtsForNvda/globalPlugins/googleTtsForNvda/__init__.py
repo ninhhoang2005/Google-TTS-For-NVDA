@@ -40,6 +40,7 @@ from synthDrivers.googleTtsForNvda.bridge import (
 from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatalog
 from synthDrivers.googleTtsForNvda import voice_store
 
+from . import updater, updateGui
 from .settings import GoogleTtsSettingsPanel, bind_read_only_text_focus_announcement
 from .voiceManager import VoiceManagerDialog
 
@@ -51,6 +52,7 @@ config.conf.spec[CONFIG_SECTION] = {
 	CONFIG_AUTO_LANGUAGE_DETECTION: f"boolean(default={str(DEFAULT_AUTO_LANGUAGE_DETECTION).lower()})",
 	CONFIG_AUTO_LANGUAGE_PREFERRED: f"string(default={DEFAULT_AUTO_LANGUAGE_PREFERRED})",
 	CONFIG_AUTO_LANGUAGE_PROFILES: f"string(default={DEFAULT_AUTO_LANGUAGE_PROFILES})",
+	updateGui.CONFIG_AUTO_UPDATE_CHECK: f"boolean(default={str(updateGui.DEFAULT_AUTO_UPDATE_CHECK).lower()})",
 	CONFIG_BROWSER_RUNTIME: f"string(default={DEFAULT_BROWSER_RUNTIME})",
 }
 
@@ -322,7 +324,7 @@ def _show_manual_web_url_dialog(url: str) -> None:
 				style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 			)
 			urlControl.SetName(_("Download address"))
-			bind_read_only_text_focus_announcement(urlControl)
+			bind_read_only_text_focus_announcement(urlControl, minLines=2, maxLines=5)
 			buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
 			copyButton = wx.Button(dialog, label=_("&Copy link"))
 			closeButton = wx.Button(dialog, id=wx.ID_OK, label=_("&Close"))
@@ -479,7 +481,7 @@ def _make_read_only_text_setting_control(self: Any, setting: Any, settingsStorag
 	)
 	edit = labeledControl.control
 	edit.SetName(str(getattr(setting, "displayName", setting.id)))
-	bind_read_only_text_focus_announcement(edit)
+	bind_read_only_text_focus_announcement(edit, minLines=2, maxLines=5)
 	setattr(self, f"{setting.id}Edit", edit)
 	setattr(self, f"{setting.id}List", edit)
 	try:
@@ -1283,6 +1285,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self) -> None:
 		super().__init__()
 		self.voiceManagerMenuItem: wx.MenuItem | None = None
+		self._startupUpdateCheckRegistered = False
 		if not globalVars.appArgs.secure:
 			_patch_synth_selection()
 			_patch_read_only_text_setting()
@@ -1290,6 +1293,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			_patch_google_tts_voice_dictionary_loading()
 			_patch_auto_language_voice_dictionary()
 			_register_auto_language_speech_filter()
+			try:
+				updater.cleanup_update_files()
+			except Exception:
+				log.debug("Could not clean temporary Google TTS For NVDA update files.", exc_info=True)
+			try:
+				import core
+
+				core.postNvdaStartup.register(self._on_post_nvda_startup)
+				self._startupUpdateCheckRegistered = True
+			except Exception:
+				log.debug("Could not register Google TTS For NVDA automatic update check.", exc_info=True)
 			if GoogleTtsSettingsPanel not in gui.settingsDialogs.NVDASettingsDialog.categoryClasses:
 				gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(GoogleTtsSettingsPanel)
 			self.voiceManagerMenuItem = gui.mainFrame.sysTrayIcon.toolsMenu.Append(
@@ -1299,8 +1313,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			)
 			gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.on_open_voice_manager, self.voiceManagerMenuItem)
 
+	def _on_post_nvda_startup(self, *args: Any, **kwargs: Any) -> None:
+		try:
+			updateGui.start_automatic_update_check()
+		except Exception:
+			log.debug("Could not start Google TTS For NVDA automatic update check.", exc_info=True)
+
 	def terminate(self, *args: Any, **kwargs: Any) -> None:
 		_close_voice_manager()
+		if self._startupUpdateCheckRegistered:
+			try:
+				import core
+
+				core.postNvdaStartup.unregister(self._on_post_nvda_startup)
+			except Exception:
+				log.debug("Could not unregister Google TTS For NVDA automatic update check.", exc_info=True)
+			self._startupUpdateCheckRegistered = False
 		try:
 			gui.settingsDialogs.NVDASettingsDialog.categoryClasses.remove(GoogleTtsSettingsPanel)
 		except ValueError:
