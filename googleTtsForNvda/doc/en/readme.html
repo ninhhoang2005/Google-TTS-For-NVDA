@@ -136,12 +136,12 @@
 	<h2>Change Log</h2>
 	<h3>Version 0.5 (2026-07-19)</h3>
 	<ul>
-		<li><strong>Add-on Updates:</strong> Added built-in update checking from the Google TTS For NVDA settings category, with optional startup checks, localized update information, in-NVDA package download, size and SHA-256 verification, and handoff to NVDA's standard add-on installer.</li>
-		<li><strong>Chromium Runtime Fallback:</strong> Improved Chrome, Edge, and Brave fallback so a runtime is used only after browser startup, DevTools connection, speech page WebSocket discovery, CDP setup, and browser harness readiness succeed. Edge can now be skipped when WebView2 is missing and another supported runtime is usable.</li>
-		<li><strong>NVDA Compatibility &amp; CLD2:</strong> Improved compatibility with older and newer NVDA callback signatures across speech, spelling, voice dictionary, settings, synth switching, global plugin, and synth driver hooks. Rebuilt bundled CLD2 DLLs from upstream source and documented their provenance for future maintenance and antivirus review.</li>
-		<li><strong>Simplified Chinese Localization:</strong> Added Simplified Chinese UI translation, localized metadata, language sorting, and user documentation.</li>
-		<li><strong>Speech Reliability:</strong> Fixed rare incomplete speech cache replay, restored Pitch control for SeaNet voices, and guarded against stale Voice Settings refresh errors after switching away from Google TTS.</li>
-		<li><strong>Status Field Accessibility:</strong> Improved read-only runtime, automatic language profile, update status, update information, Speech Settings notice, and manual URL fallback fields so they are focusable, labeled, reviewable, and sized to their content without delayed automatic readback.</li>
+		<li><strong>Add-on Updates:</strong> Added built-in update checking from the Google TTS For NVDA settings category, with optional startup checks, localized update information, in-NVDA package download, and handoff to NVDA's standard add-on installer.</li>
+		<li><strong>Chromium Runtime Fallback:</strong> Improved Chrome, Edge, and Brave fallback so Google TTS For NVDA can try another supported browser runtime when the selected one cannot start or is not ready. Edge can now be skipped when WebView2 is missing and another supported runtime is usable.</li>
+		<li><strong>NVDA Compatibility:</strong> Improved compatibility with older and newer NVDA versions across speech, spelling, voice dictionaries, settings, synth switching, the global plugin, and the synth driver.</li>
+		<li><strong>Simplified Chinese and Russian Localization:</strong> Added Simplified Chinese and Russian UI translations and user documentation. Simplified Chinese also includes localized metadata and language sorting.</li>
+		<li><strong>Speech Reliability:</strong> Fixed rare cases where interrupted speech could be replayed incompletely, restored Pitch control for SeaNet voices, and avoided a rare Voice Settings error after switching away from Google TTS.</li>
+		<li><strong>Status Field Accessibility:</strong> Made runtime, automatic language profile, update, Speech Settings notice, and manual URL fallback status fields easier to focus and review without delayed repeated announcements.</li>
 	</ul>
 
 	<h3>Version 0.4 (2026-07-16)</h3>
