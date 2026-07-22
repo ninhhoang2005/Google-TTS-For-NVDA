@@ -15,6 +15,35 @@ except Exception:  # pragma: no cover - NVDA is not available in local unit chec
 _DLL_DIR = Path(__file__).with_name("cld2")
 _DLL_NAMES = ("cld2_x64.dll", "cld2.dll") if ctypes.sizeof(ctypes.c_void_p) == 8 else ("cld2_x86.dll", "cld2.dll")
 _MIN_RELIABLE_PERCENT = 50
+_LANGUAGE_ALIASES = {
+	"ar": {"ar-xa"},
+	"ar-xa": {"ar"},
+	"cmn": {"zh"},
+	"cmn-cn": {"zh-cn", "zh-hans"},
+	"cmn-tw": {"zh-hant", "zh-tw"},
+	"fil": {"tl", "fil-ph"},
+	"fil-ph": {"fil", "tl"},
+	"he": {"iw", "he-il"},
+	"he-il": {"he", "iw"},
+	"iw": {"he", "he-il"},
+	"jv": {"jw", "jv-id"},
+	"jv-id": {"jv", "jw"},
+	"jw": {"jv", "jv-id"},
+	"nb": {"no", "nn", "nb-no"},
+	"nb-no": {"nb", "no", "nn"},
+	"nn": {"nb", "nb-no", "no"},
+	"no": {"nb", "nb-no", "nn"},
+	"tl": {"fil", "fil-ph"},
+	"yue": {"yue-hk"},
+	"yue-hk": {"yue", "zh-hant", "zh-hk"},
+	"zh": {"cmn-cn", "cmn-tw", "yue-hk"},
+	"zh-cn": {"cmn-cn", "zh-hans"},
+	"zh-hans": {"cmn-cn", "zh-cn"},
+	"zh-hant": {"cmn-tw", "yue-hk", "zh-hk", "zh-tw"},
+	"zh-hk": {"yue-hk", "zh-hant"},
+	"zh-tw": {"cmn-tw", "zh-hant"},
+}
+_CHINESE_LANGUAGE_ROOTS = {"cmn", "yue", "zh"}
 
 
 @dataclass(frozen=True)
@@ -123,11 +152,48 @@ def _candidate_for_language(language: str, candidateLanguages: list[str]) -> str
 	for candidate in candidateLanguages:
 		if _normalize_language(candidate) == languageKey:
 			return candidate
-	languageRoot = languageKey.split("-", 1)[0]
+	languageAliases = _language_aliases(languageKey)
 	for candidate in candidateLanguages:
-		if _normalize_language(candidate).split("-", 1)[0] == languageRoot:
+		if _normalize_language(candidate) in languageAliases:
 			return candidate
+	languageRoot = _language_root(languageKey)
+	for candidate in candidateLanguages:
+		if _language_root(candidate) == languageRoot:
+			return candidate
+	if _language_family(languageKey) == "zh":
+		for candidate in candidateLanguages:
+			if _language_family(candidate) == "zh":
+				return candidate
 	return None
+
+
+def language_match_keys(language: str | None) -> set[str]:
+	languageKey = _normalize_language(language)
+	if not languageKey:
+		return set()
+	aliases = {languageKey}
+	aliases.update(_language_aliases(languageKey))
+	root = _language_root(languageKey)
+	aliases.add(root)
+	aliases.update(_language_aliases(root))
+	if _language_family(languageKey) == "zh":
+		aliases.update(_CHINESE_LANGUAGE_ROOTS)
+	return aliases
+
+
+def _language_aliases(languageKey: str) -> set[str]:
+	return set(_LANGUAGE_ALIASES.get(languageKey, set()))
+
+
+def _language_family(language: str | None) -> str:
+	root = _language_root(language)
+	if root in _CHINESE_LANGUAGE_ROOTS:
+		return "zh"
+	return root
+
+
+def _language_root(language: str | None) -> str:
+	return _normalize_language(language).split("-", 1)[0]
 
 
 def _normalize_language(language: str | None) -> str:

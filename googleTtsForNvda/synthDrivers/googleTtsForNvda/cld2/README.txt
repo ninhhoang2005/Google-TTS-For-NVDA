@@ -7,8 +7,10 @@ from the CLD2Owners/cld2 project:
 https://github.com/CLD2Owners/cld2
 
 The bundled DLLs were rebuilt from CLD2Owners/cld2 commit
-b56fa78a2fe44ac2851bae5bf4f4693a0644da7b with MinGW-w64. They export the
-small C ABI used by this add-on:
+b56fa78a2fe44ac2851bae5bf4f4693a0644da7b with Microsoft Visual C++ Build
+Tools 19.51.36248. The build uses CLD2's small Chrome table set
+(`V2.0 - 20141016`), static C runtime linking, and exports the small C ABI
+used by this add-on:
 
 - cld2_detect_language
 - cld2_version

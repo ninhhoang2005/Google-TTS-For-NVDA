@@ -2117,24 +2117,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		key = self._normalize_language(language)
 		if not key:
 			return set()
-		aliases = {key}
-		aliasMap = {
-			"cmn-cn": {"zh-cn"},
-			"zh-cn": {"cmn-cn"},
-			"cmn-tw": {"zh-tw"},
-			"zh-tw": {"cmn-tw"},
-			"yue-hk": {"zh-hk"},
-			"zh-hk": {"yue-hk"},
-			"zh": {"cmn-cn", "cmn-tw", "yue-hk"},
-			"fil-ph": {"tl", "fil"},
-			"tl": {"fil-ph", "fil"},
-			"ar-xa": {"ar"},
-			"ar": {"ar-xa"},
-		}
-		aliases.update(aliasMap.get(key, set()))
-		if key.startswith("fil-"):
-			aliases.update({"fil", "tl"})
-		return aliases
+		return language_detector.language_match_keys(key)
 
 	def _language_matches(self, left: str | None, right: str | None) -> bool:
 		leftKeys = self._language_match_keys(left)
