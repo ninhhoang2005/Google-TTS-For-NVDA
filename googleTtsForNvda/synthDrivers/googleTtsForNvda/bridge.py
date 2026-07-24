@@ -63,6 +63,9 @@ EDGE_PROFILE_DIR_NAME = "edgeProfiles"
 BRAVE_PROFILE_DIR_NAME = "braveProfiles"
 PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
 PERSISTENT_PROFILE_MAX_BYTES = 500 * 1024 * 1024
+RUNTIME_MEMORY_CHECK_INTERVAL_SECONDS = 30
+RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD = 768 * 1024 * 1024
+RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD = 1024 * 1024 * 1024
 CONFIG_SECTION = "googleTtsForNvda"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
 CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
@@ -197,6 +200,168 @@ def _is_transient_runtime_evaluate_error(error: CdpError) -> bool:
 		message in technicalDetail
 		for message in _TRANSIENT_RUNTIME_EVALUATE_ERRORS
 	)
+
+
+_RUNTIME_RECYCLE_ERROR_MARKERS = (
+	"Timed out waiting for Runtime.evaluate",
+	"Timed out waiting for browser speech audio",
+	"Browser DevTools websocket closed",
+	"Browser DevTools websocket is not connected",
+	"Runtime.evaluate",
+	"WASM TTS engine was not loaded",
+)
+
+
+def _runtime_error_requires_recycle(error: BaseException) -> bool:
+	if isinstance(error, CdpCancelled):
+		return False
+	if not isinstance(error, CdpError):
+		return True
+	technicalDetail = str(getattr(error, "technicalDetail", "") or "")
+	return any(marker in technicalDetail for marker in _RUNTIME_RECYCLE_ERROR_MARKERS)
+
+
+def _format_bytes(byteCount: int) -> str:
+	return f"{byteCount / (1024 * 1024):.1f} MB"
+
+
+def _process_tree_ids(rootPid: int) -> list[int]:
+	if os.name != "nt":
+		return [rootPid]
+	try:
+		import ctypes
+		from ctypes import wintypes
+	except Exception:
+		return [rootPid]
+
+	TH32CS_SNAPPROCESS = 0x00000002
+	INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+	class PROCESSENTRY32W(ctypes.Structure):
+		_fields_ = [
+			("dwSize", wintypes.DWORD),
+			("cntUsage", wintypes.DWORD),
+			("th32ProcessID", wintypes.DWORD),
+			("th32DefaultHeapID", ctypes.c_size_t),
+			("th32ModuleID", wintypes.DWORD),
+			("cntThreads", wintypes.DWORD),
+			("th32ParentProcessID", wintypes.DWORD),
+			("pcPriClassBase", wintypes.LONG),
+			("dwFlags", wintypes.DWORD),
+			("szExeFile", wintypes.WCHAR * 260),
+		]
+
+	kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+	kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+	kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+	kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+	kernel32.Process32FirstW.restype = wintypes.BOOL
+	kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+	kernel32.Process32NextW.restype = wintypes.BOOL
+	kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+	kernel32.CloseHandle.restype = wintypes.BOOL
+	snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+	if snapshot == INVALID_HANDLE_VALUE:
+		return [rootPid]
+	childrenByParent: dict[int, list[int]] = {}
+	try:
+		entry = PROCESSENTRY32W()
+		entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+		if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+			return [rootPid]
+		while True:
+			parentPid = int(entry.th32ParentProcessID)
+			processId = int(entry.th32ProcessID)
+			childrenByParent.setdefault(parentPid, []).append(processId)
+			if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+				break
+	finally:
+		kernel32.CloseHandle(snapshot)
+
+	result: list[int] = []
+	pending = [rootPid]
+	seen: set[int] = set()
+	while pending:
+		processId = pending.pop()
+		if processId in seen:
+			continue
+		seen.add(processId)
+		result.append(processId)
+		pending.extend(childrenByParent.get(processId, ()))
+	return result
+
+
+def _process_memory_counters(processId: int) -> tuple[int, int] | None:
+	if os.name != "nt":
+		return None
+	try:
+		import ctypes
+		from ctypes import wintypes
+	except Exception:
+		return None
+
+	PROCESS_QUERY_INFORMATION = 0x0400
+	PROCESS_VM_READ = 0x0010
+
+	class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+		_fields_ = [
+			("cb", wintypes.DWORD),
+			("PageFaultCount", wintypes.DWORD),
+			("PeakWorkingSetSize", ctypes.c_size_t),
+			("WorkingSetSize", ctypes.c_size_t),
+			("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+			("QuotaPagedPoolUsage", ctypes.c_size_t),
+			("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+			("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+			("PagefileUsage", ctypes.c_size_t),
+			("PeakPagefileUsage", ctypes.c_size_t),
+			("PrivateUsage", ctypes.c_size_t),
+		]
+
+	kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+	psapi = ctypes.WinDLL("psapi", use_last_error=True)
+	kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+	kernel32.OpenProcess.restype = wintypes.HANDLE
+	kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+	kernel32.CloseHandle.restype = wintypes.BOOL
+	psapi.GetProcessMemoryInfo.argtypes = (
+		wintypes.HANDLE,
+		ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+		wintypes.DWORD,
+	)
+	psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+	handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, processId)
+	if not handle:
+		return None
+	try:
+		counters = PROCESS_MEMORY_COUNTERS_EX()
+		counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+		if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+			return None
+		return int(counters.PrivateUsage), int(counters.WorkingSetSize)
+	finally:
+		kernel32.CloseHandle(handle)
+
+
+def _process_tree_memory_usage(rootPid: int) -> dict[str, int] | None:
+	totalPrivateBytes = 0
+	totalWorkingSetBytes = 0
+	processCount = 0
+	for processId in _process_tree_ids(rootPid):
+		counters = _process_memory_counters(processId)
+		if counters is None:
+			continue
+		privateBytes, workingSetBytes = counters
+		totalPrivateBytes += privateBytes
+		totalWorkingSetBytes += workingSetBytes
+		processCount += 1
+	if processCount <= 0:
+		return None
+	return {
+		"privateBytes": totalPrivateBytes,
+		"workingSetBytes": totalWorkingSetBytes,
+		"processCount": processCount,
+	}
 
 
 def _browser_profile_in_use_error() -> _BrowserProfileInUseError:
@@ -712,6 +877,12 @@ class BrowserProcessManager:
 	@property
 	def chrome_process(self) -> subprocess.Popen[bytes] | None:
 		return self._chromeProcess
+
+	def browser_memory_usage(self) -> dict[str, int] | None:
+		process = self._chromeProcess
+		if process is None or process.poll() is not None:
+			return None
+		return _process_tree_memory_usage(process.pid)
 
 	@property
 	def debug_port(self) -> int | None:
@@ -1322,6 +1493,10 @@ class WasmTtsEngineBridge:
 		self._stopLock = threading.Lock()
 		self._runtimeBusy = False
 
+	@property
+	def runtime_busy(self) -> bool:
+		return self._runtimeBusy
+
 	def enable_cdp_domains(self, cancelEvent: threading.Event | None = None) -> None:
 		self._cdp.request("Runtime.enable", timeout=15, cancelEvent=cancelEvent)
 		self._cdp.request("Page.enable", timeout=15, cancelEvent=cancelEvent)
@@ -1563,6 +1738,10 @@ class ChromeTtsBridge:
 		self._cdp_client = CdpClient()
 		self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
 		self._lock = threading.RLock()
+		self._needsRecycle = False
+		self._recycleUrgent = False
+		self._recycleReason = ""
+		self._lastMemoryCheckAt = 0.0
 
 	@classmethod
 	def find_browser(cls) -> str | None:
@@ -1591,6 +1770,67 @@ class ChromeTtsBridge:
 	@property
 	def _serverPort(self) -> int | None:
 		return self._process_manager.server_port
+
+	def _mark_runtime_for_recycle_locked(self, reason: str, *, urgent: bool = False) -> None:
+		if not self._needsRecycle:
+			log.debug("Google TTS Chromium runtime marked for recycle: %s", reason)
+		elif urgent and not self._recycleUrgent:
+			log.debug("Google TTS Chromium runtime recycle promoted to urgent: %s", reason)
+		self._needsRecycle = True
+		self._recycleUrgent = self._recycleUrgent or urgent
+		self._recycleReason = reason
+
+	def _mark_runtime_error_for_recycle(self, error: BaseException) -> None:
+		if not _runtime_error_requires_recycle(error):
+			return
+		detail = str(getattr(error, "technicalDetail", "") or error.__class__.__name__)
+		reason = detail.splitlines()[0] if detail else error.__class__.__name__
+		with self._lock:
+			self._mark_runtime_for_recycle_locked(f"runtime error: {reason}", urgent=True)
+
+	def _mark_memory_recycle_if_needed_locked(self) -> None:
+		now = time.monotonic()
+		if now - self._lastMemoryCheckAt < RUNTIME_MEMORY_CHECK_INTERVAL_SECONDS:
+			return
+		self._lastMemoryCheckAt = now
+		usage = self._process_manager.browser_memory_usage()
+		if usage is None:
+			return
+		privateBytes = int(usage.get("privateBytes", 0))
+		workingSetBytes = int(usage.get("workingSetBytes", 0))
+		if (
+			privateBytes <= RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD
+			and workingSetBytes <= RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD
+		):
+			return
+		reason = (
+			"memory threshold exceeded "
+			f"(private={_format_bytes(privateBytes)}, "
+			f"workingSet={_format_bytes(workingSetBytes)}, "
+			f"processes={usage.get('processCount', 0)})"
+		)
+		self._mark_runtime_for_recycle_locked(reason, urgent=False)
+
+	def maybe_recycle_runtime(self, *, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
+		with self._lock:
+			if checkMemory:
+				self._mark_memory_recycle_if_needed_locked()
+			if not self._needsRecycle:
+				return False
+			if self._engine.runtime_busy:
+				return False
+			if not self._recycleUrgent and not allowIdleRecycle:
+				return False
+			reason = self._recycleReason or "runtime health check"
+			log.debug("Recycling Google TTS Chromium runtime: %s", reason)
+			self._cdp_client.close()
+			self._process_manager.terminate()
+			self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
+			self._needsRecycle = False
+			self._recycleUrgent = False
+			self._recycleReason = ""
+			self._lastMemoryCheckAt = time.monotonic()
+			return True
 
 	def ensure_connection(self, cancelEvent: threading.Event | None = None) -> None:
 		with self._lock:
@@ -1627,8 +1867,16 @@ class ChromeTtsBridge:
 					raise
 
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
-		self.ensure_connection(cancelEvent=cancelEvent)
-		return self._engine.preload_voice(options, cancelEvent=cancelEvent)
+		try:
+			_raise_if_cancelled(cancelEvent)
+			self.maybe_recycle_runtime(allowIdleRecycle=False, checkMemory=False)
+			self.ensure_connection(cancelEvent=cancelEvent)
+			return self._engine.preload_voice(options, cancelEvent=cancelEvent)
+		except CdpCancelled:
+			raise
+		except Exception as exc:
+			self._mark_runtime_error_for_recycle(exc)
+			raise
 
 	def speak(
 		self,
@@ -1639,15 +1887,23 @@ class ChromeTtsBridge:
 		onMark: MarkCallback | None = None,
 		segments: list[str] | None = None,
 	) -> dict[str, Any]:
-		self.ensure_connection(cancelEvent=cancelEvent)
-		return self._engine.speak(
-			text,
-			options,
-			onAudio,
-			cancelEvent=cancelEvent,
-			onMark=onMark,
-			segments=segments,
-		)
+		try:
+			_raise_if_cancelled(cancelEvent)
+			self.maybe_recycle_runtime(allowIdleRecycle=False, checkMemory=False)
+			self.ensure_connection(cancelEvent=cancelEvent)
+			return self._engine.speak(
+				text,
+				options,
+				onAudio,
+				cancelEvent=cancelEvent,
+				onMark=onMark,
+				segments=segments,
+			)
+		except CdpCancelled:
+			raise
+		except Exception as exc:
+			self._mark_runtime_error_for_recycle(exc)
+			raise
 
 	def stop_runtime(self) -> None:
 		try:
@@ -1663,6 +1919,10 @@ class ChromeTtsBridge:
 		with self._lock:
 			self._cdp_client.close()
 			self._process_manager.terminate()
+			self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
+			self._needsRecycle = False
+			self._recycleUrgent = False
+			self._recycleReason = ""
 
 	def _cdp_request(
 		self,

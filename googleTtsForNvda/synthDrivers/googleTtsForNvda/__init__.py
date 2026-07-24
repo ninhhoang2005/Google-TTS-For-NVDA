@@ -1514,6 +1514,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			log.exception("Google TTS speech failed.", exc_info=True)
 			if not cancelEvent.is_set():
 				synthDoneSpeaking.notify(synth=self)
+		finally:
+			if not cancelEvent.is_set():
+				self._maybe_recycle_bridge_after_request()
 
 	def _speak_text(
 		self,
@@ -1669,6 +1672,21 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _has_queued_speech(self) -> bool:
 		with self._speechCondition:
 			return bool(self._speechQueue)
+
+	def _maybe_recycle_bridge_after_request(self) -> None:
+		if self._shutdownEvent.is_set():
+			return
+		queueIdle = not self._has_queued_speech()
+		try:
+			recycled = self._bridge.maybe_recycle_runtime(allowIdleRecycle=queueIdle)
+		except Exception:
+			log.debug("Could not recycle Google TTS Chromium runtime.", exc_info=True)
+			return
+		if not recycled:
+			return
+		self._clear_short_audio_cache()
+		if queueIdle and not self._shutdownEvent.is_set():
+			self._warm_current_voice_async(delay=_PRELOAD_RESUME_DELAY_SECONDS)
 
 	def _finish_request_audio(self) -> None:
 		if self._has_queued_speech():

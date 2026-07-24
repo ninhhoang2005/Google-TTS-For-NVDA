@@ -960,6 +960,17 @@
 			return { success: true };
 		} catch (error) {
 			emit({ type: "error", message: error && error.message ? error.message : String(error) });
+			try {
+				const stoppedCleanly = await Promise.race([
+					stopActiveSynthesis().then(() => true),
+					new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
+				]);
+				if (!stoppedCleanly) {
+					console.debug("Timed out while stopping engine after speech error.");
+				}
+			} catch (stopError) {
+				console.debug("Ignored engine stop failure after speech error:", stopError);
+			}
 			if (currentSessionId === payload.sessionId) {
 				currentSessionId = null;
 			}
